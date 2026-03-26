@@ -128,6 +128,7 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             
         sustainability_raw = min(1.0, duration_hours / 72.0) if duration_hours > 0 else 0.0
         
+        # 💡 総Eng 800以上で飽和、2000以上で完全飽和（0.0）になるよう厳密化
         total_eng = word_eng[w]
         novelty_raw = max(0.0, 1.0 - (total_eng / 800.0))
         
@@ -209,16 +210,17 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
     df['is_high_css'] = df['score_css'] >= 40
     df['is_high_eos'] = df['score_eos'] >= 50
     
-    # 💡 飽和判定フラグ
+    # 💡 飽和・継続上昇・完全飽和のフラグを明確に定義
     df['is_saturated'] = df['novelty_z'] < 0.3
+    df['is_fully_saturated'] = df['novelty_z'] <= 0.05 # 完全な巨大語（ChatGPT等）
+    df['is_continuous'] = (df['sustainability_z'] >= 0.7) & (df['growth_z'] >= 0.5)
 
     def generate_text(row):
         kw = row['token']
         x_ratio = row.get('x_ratio', 0.5)
         cross = row.get('cross_platform_z', 0.0)
         is_saturated = row.get('is_saturated', False)
-        # 💡 継続上昇フラグ（成長率と継続性の両方が高いか）
-        is_continuous = row.get('sustainability_z', 0.0) >= 0.7 and row.get('growth_z', 0.0) >= 0.5
+        is_continuous = row.get('is_continuous', False)
 
         if kw in MAGIC_WORDS: return "見送り", ""
         
@@ -226,7 +228,7 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         is_yt_heavy = x_ratio < 0.3
         is_x_heavy = x_ratio > 0.7
         
-        # 💡 飽和語でも「継続上昇」の条件を満たす場合は、先読みや速報型への復帰を許容
+        # 💡 飽和語は強制的に解説・比較・反応まとめに落とす
         if is_saturated and not is_continuous:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif is_yt_heavy or row['conversion_z'] >= 0.2: return "解説型", f"【最新版】「{kw}」の活用法まとめ"
