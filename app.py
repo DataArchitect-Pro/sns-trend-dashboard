@@ -248,17 +248,15 @@ df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_no
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
 df_display['is_low_impact'] = df_display['engagement_raw'] < 5.0
-# 💡 新規性による飽和度判定フラグ（巨大ワードを識別）
-df_display['is_saturated'] = df_display['novelty_z'] < 0.3
-
+# 💡 logic.pyで付与した「飽和フラグ」をUIでも利用する
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
 is_continuous = df_display.get('sustainability_z', 0) >= 0.7
 
-# 💡 Sランクへの昇格条件に「(~df_display['is_saturated'])」を追加し、飽和語を強制ブロック
-s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~df_display['is_saturated']) & is_high_score & (has_network | is_emerging | is_continuous)
+# 💡 Sランクへの昇格条件に「(~df_display['is_saturated'])」を追加。これにより飽和語はSに絶対上がらない
+s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~df_display.get('is_saturated', False)) & is_high_score & (has_network | is_emerging | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 top3_indices = s_candidates.head(3).index
@@ -287,8 +285,8 @@ df_display['text_content_type'] = df_display.apply(
     axis=1
 )
 
-# 💡 一覧表用の明示的なペナルティ可視化カラムを追加
-df_display['saturated_penalty'] = df_display['is_saturated'].apply(lambda x: "あり(S昇格不可)" if x else "なし")
+# 💡 一覧表に「飽和度ペナルティ（競争激化によるSブロック）」の有無を可視化
+df_display['saturated_penalty'] = df_display.get('is_saturated', False).apply(lambda x: "作動 (S昇格ブロック)" if x else "なし")
 
 def enrich_card_data(row):
     original_ctype = row['text_content_type']
@@ -301,10 +299,9 @@ def enrich_card_data(row):
     x_ratio = row.get('x_ratio', 0.5)
     
     is_spike_flag = duration < 1.0
-    is_saturated_flag = (novelty < 0.3) and (css >= 50)
+    is_saturated_flag = row.get('is_saturated', False)
     is_low_impact_flag = row.get('is_low_impact', False)
     is_continuous_flag = row.get('sustainability_z', 0) >= 0.7
-    is_x_heavy = x_ratio > 0.7
 
     if pri == "🔥 S (最優先)":
         action = "今すぐ" + original_ctype.replace('型', '投稿')
@@ -314,8 +311,6 @@ def enrich_card_data(row):
             reason = "数日単位で安定して伸びており、今のうちに押さえるべき継続上昇テーマ"
         elif novelty >= 0.5:
             reason = "新規性と成長率が高く、今すぐ先回りすべき本命テーマ"
-        elif is_x_heavy:
-            reason = "X(Twitter)で先行して反応が強く、速報・拡散狙いの仕込みが有効"
         elif has_net:
             reason = "関連テーマへの広がりが強く、独自の切り口で狙える優良候補"
         else:
@@ -323,11 +318,11 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        if is_spike_flag:
-            return "継続確認待ち", "短期間の局地的な反応（スパイク）のため、トレンドが継続するか様子見"
-        elif is_saturated_flag:
-            # 💡 巨大飽和ワード（ChatGPTなど）専用の的確な理由
+        # 💡 パターン2（飽和語）向けの専用分岐
+        if is_saturated_flag:
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
+        elif is_spike_flag:
+            return "継続確認待ち", "短期間の局地的な反応（スパイク）のため、トレンドが継続するか様子見"
         elif is_continuous_flag:
             return "準本命候補", "数日単位で継続上昇しているが、Sランク昇格には話題力や広がりがあと一歩不足"
         elif not has_net:
@@ -395,10 +390,10 @@ if count_s == 0:
         a_reasons = df_display[df_display['priority'] == "👀 A (保留)"]['reason'].tolist()
         if any("スパイク" in r for r in a_reasons):
             msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続するか不透明なため、今回は「保留」と判定しました。"
-        elif any("継続上昇" in r for r in a_reasons):
-            msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
         elif any("後追いリスク" in r for r in a_reasons):
             msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
+        elif any("継続上昇" in r for r in a_reasons):
+            msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
         else:
             msg = "注目候補は抽出されましたが、最優先で着手すべき基準には届かず、「保留」判定となりました。"
     else:
@@ -470,8 +465,8 @@ view_cols = {
     'growth_z': '成長率',
     'sustainability_z': '継続性',
     'conversion_z': '広がり',
-    'cross_platform_z': '媒体横断性', # 💡 追加
-    'saturated_penalty': '飽和ペナルティ' # 💡 追加
+    'cross_platform_z': '媒体横断性', 
+    'saturated_penalty': '飽和ペナルティ' # 💡 追加：S昇格ブロックの有無を明示
 }
 
 st.dataframe(
