@@ -253,8 +253,10 @@ has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
+# 💡 継続性フラグ（継続上昇パターンの救済）
+is_continuous = df_display.get('sustainability_z', 0) >= 0.7
 
-s_condition = (~is_spike) & (~df_display['is_low_impact']) & is_high_score & (has_network | is_emerging)
+s_condition = (~is_spike) & (~df_display['is_low_impact']) & is_high_score & (has_network | is_emerging | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 top3_indices = s_candidates.head(3).index
@@ -292,29 +294,26 @@ def enrich_card_data(row):
     css = row.get('score_css', 0)
     eos = row.get('score_eos', 0)
     x_ratio = row.get('x_ratio', 0.5)
-    cross = row.get('cross_platform_z', 0.0)
     
     is_spike_flag = duration < 1.0
     is_saturated_flag = (novelty < 0.3) and (css >= 50)
     is_low_impact_flag = row.get('is_low_impact', False)
-    
-    is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
+    is_continuous_flag = row.get('sustainability_z', 0) >= 0.7
     is_x_heavy = x_ratio > 0.7
-    is_yt_heavy = x_ratio < 0.3
 
     if pri == "🔥 S (最優先)":
         action = "今すぐ" + original_ctype.replace('型', '投稿')
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         
-        # 💡 Sランクの理由文を媒体特性（プラットフォームバイアス）で出し分け
-        if is_x_heavy:
-            reason = "X(Twitter)で先行して反応が強く、速報・拡散狙いの仕込みが有効"
-        elif is_yt_heavy:
-            reason = "YouTube等で検索・解説需要が強く、じっくり深掘りする企画が有効"
+        # 💡 Sランク：継続上昇(パターン8)専用の理由文を追加
+        if is_continuous_flag:
+            reason = "数日単位で安定して伸びており、今のうちに押さえるべき継続上昇テーマ"
         elif novelty >= 0.5:
-            reason = "新規性が高く媒体横断で注目が広がっている、全方位で狙うべき本命テーマ"
+            reason = "新規性と成長率が高く、今すぐ先回りすべき本命テーマ"
+        elif is_x_heavy:
+            reason = "X(Twitter)で先行して反応が強く、速報・拡散狙いの仕込みが有効"
         elif has_net:
-            reason = "媒体横断で関連テーマへの広がりが強く、独自の切り口で狙える優良候補"
+            reason = "関連テーマへの広がりが強く、独自の切り口で狙える優良候補"
         else:
             reason = "反応が急増しており、継続監視しつつ先読みが効く注目テーマ"
         return action, reason
@@ -324,6 +323,9 @@ def enrich_card_data(row):
             return "継続確認待ち", "短期間の局地的な反応（スパイク）のため、トレンドが継続するか様子見"
         elif is_saturated_flag:
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
+        # 💡 Aランク：継続上昇だが惜しい(パターン8)専用の理由文を追加
+        elif is_continuous_flag:
+            return "準本命候補", "数日単位で継続上昇しているが、Sランク昇格には話題力や広がりがあと一歩不足"
         elif not has_net:
             return "様子見", "反応や新規性はあるが、関連テーマへの広がりが弱く今すぐ仕込むには根拠不足"
         else:
@@ -389,6 +391,9 @@ if count_s == 0:
         a_reasons = df_display[df_display['priority'] == "👀 A (保留)"]['reason'].tolist()
         if any("スパイク" in r for r in a_reasons):
             msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続するか不透明なため、今回は「保留」と判定しました。"
+        elif any("継続上昇" in r for r in a_reasons):
+            # 💡 S=0, A=継続上昇(パターン8) 専用の動的メッセージ
+            msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
         elif any("後追いリスク" in r for r in a_reasons):
             msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
         else:
@@ -421,10 +426,10 @@ color_discrete_map = {
     "解説型": "#0288D1",   
     "比較型": "#0097A7",   
     "まとめ型": "#388E3C", 
-    "速報型": "#E64A19",     # 💡 新規追加: X特化
-    "反応まとめ型": "#F57C00", # 💡 新規追加: X特化
-    "網羅まとめ型": "#43A047", # 💡 新規追加: 媒体横断
-    "検証型": "#8E24AA",     # 💡 新規追加: YT特化
+    "速報型": "#E64A19",     
+    "反応まとめ型": "#F57C00", 
+    "網羅まとめ型": "#43A047", 
+    "検証型": "#8E24AA",     
     "保留": "#9FA8DA",     
     "見送り": "#BDBDBD"    
 }
@@ -469,7 +474,6 @@ st.dataframe(
     use_container_width=True, hide_index=True
 )
 
-# 💡 解説テキストをプラットフォーム対応版にアップデート
 with st.expander("💡 投稿型の意味と使い分け", expanded=False):
     st.markdown("""
     * **先読み型 (媒体横断):** まだ競争が浅く、これから伸びるテーマ。いち早く発信することで第一人者ポジションを狙えます。
