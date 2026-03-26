@@ -21,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意
+# 2. サンプルデータの用意 (省略せずに記載)
 # ==========================================
 SAMPLE_CSV = """text,posted_at,platform,eng,id
 次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
@@ -47,7 +47,6 @@ Pythonの学習ロードマップまとめ。初心者必見！,2023-10-01 13:00
 # ==========================================
 with st.sidebar:
     st.header("STEP 1: データ読み込み")
-    # 文言を短縮し、より行動志向に
     st.write("CSVを選択すると分析を開始します（上限200MB）")
     
     uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
@@ -164,10 +163,53 @@ if 'platform' not in df_raw.columns: df_raw['platform'] = 'X'
 df_raw = df_raw[df_raw['platform'].isin(target_platforms)]
 
 with st.spinner("AIがトレンド構造を分析し、投稿企画案を生成しています..."):
-    df = run_pipeline(df_raw)
+    # スライダーの値を引き渡し、メタデータも受け取る
+    df, metadata = run_pipeline(df_raw, min_freq=min_freq)
 
+# ==========================================
+# 🚨 失敗時のリカバリーUI（判定不能画面）
+# ==========================================
 if df.empty:
-    st.warning("⚠️ 有効なトレンドキーワードが抽出できませんでした。データ量を増やすか設定を見直してください。")
+    st.markdown("<h3 style='color: #d32f2f;'>⚠️ 現在の条件では、有効なトレンド候補を判定できませんでした</h3>", unsafe_allow_html=True)
+    st.markdown("現在のCSVでは、しきい値を満たすキーワードが見つかりませんでした。一般語が多く、固有トピックが少ない可能性があります。")
+    
+    col_err_left, col_err_right = st.columns([1, 1], gap="large")
+    
+    with col_err_left:
+        st.markdown("""
+        **🔍 原因候補**
+        * 投稿数または語の重複が少ない
+        * 一般語・ノイズ語が多い（固有テーマの不足）
+        * 「最低出現回数」の設定が高すぎる
+        """)
+        
+        st.info(f"""
+        **💡 推奨されるアクション**
+        1. 左サイドバーから **最低出現回数を下げる** (現在: {min_freq})
+        2. **「ノイズ・スパム判定語を表示する」** をONにして除外された語を確認する
+        3. より投稿数が多く、具体的な本文を含むCSVに差し替える
+        """)
+        
+    with col_err_right:
+        # メタデータを活用した簡易診断（解析ログ）
+        total_posts = len(df_raw)
+        platforms = df_raw['platform'].value_counts()
+        platform_str = " / ".join([f"{k}: {v}件" for k, v in platforms.items()])
+        
+        extracted = metadata.get('extracted_words_count', 0)
+        passed = metadata.get('passed_words_count', 0)
+        spam_dropped = metadata.get('spam_dropped_count', 0)
+        
+        st.markdown(f"""
+        <div style="background-color: #f9f9fc; padding: 20px; border-radius: 8px; border: 1px solid #e0e0e0;">
+            <strong style="color: #333; font-size: 1.1em;">📊 現在の解析ログ</strong><br><br>
+            <span style="color: #555;">読み込み投稿数：</span> <b style="font-size: 1.1em;">{total_posts}件</b><br>
+            <span style="color: #888; font-size: 0.9em;">（{platform_str} / スパム除外: {spam_dropped}件）</span><br><br>
+            <span style="color: #555;">抽出された候補語数：</span> <b style="font-size: 1.1em;">{extracted}件</b><br>
+            <span style="color: #555;">しきい値(最低{min_freq}回)を通過した語数：</span> <b style="color: #d32f2f; font-size: 1.1em;">{passed}件</b><br>
+        </div>
+        """, unsafe_allow_html=True)
+
     st.stop()
 
 # ==========================================
@@ -177,7 +219,6 @@ df_display = df if show_noise else df[~df['is_noise']].copy()
 
 ideas_df = df_display[df_display['text_content_type'] != "見送り"].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 
-# TOP3に番号を付与
 top3_indices = ideas_df.head(3).index
 df_display['Rank_Num'] = ""
 
@@ -185,7 +226,6 @@ if len(top3_indices) > 0: df_display.loc[top3_indices[0], 'Rank_Num'] = "①"
 if len(top3_indices) > 1: df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
 if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 
-# 行動一覧表用の優先度判定 (S / A / C)
 def set_priority(row):
     if row['Rank_Num'] != "": return "🔥 S (最優先)"
     if row['score_eos'] >= 50 or row['score_css'] >= 50: return "👀 A (監視・次点)"
@@ -193,7 +233,6 @@ def set_priority(row):
 
 df_display['priority'] = df_display.apply(set_priority, axis=1)
 
-# Aランクの投稿型を「保留」に統一し、凡例をスッキリさせる
 df_display['text_content_type'] = df_display.apply(
     lambda r: "保留" if r['priority'] == "👀 A (監視・次点)" and r['text_content_type'] in ["見送り", "注目型"] else r['text_content_type'], 
     axis=1
@@ -228,7 +267,6 @@ def enrich_card_data(row):
             return "様子見", "局地的な反応はあるが、ポテンシャル(EOS)の上昇待ち"
             
     else: 
-        # Cランクの理由のテンプレ感を払拭
         if row['score_css'] >= 30:
             return "今回は見送り", "話題は残っているが、伸びが止まっている"
         elif row['score_eos'] >= 30:
@@ -247,7 +285,6 @@ df_display['plot_label'] = df_display.apply(lambda r: r['Rank_Num'] if r['Rank_N
 # ==========================================
 # 7. UI 描画 (結果画面)
 # ==========================================
-# 成功メッセージは極限まで薄く
 st.markdown("<div style='color: #aaa; font-size: 0.85em; margin-bottom: 8px;'>分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
 
 # --- A. 企画案 コンパクト要約 ---
@@ -256,7 +293,6 @@ top3_ideas = df_display[df_display['Rank_Num'] != ""].sort_values(by='Rank_Num')
 
 if not top3_ideas.empty:
     for _, row in top3_ideas.iterrows():
-        # 余白を広げ、理由を薄くし、番号とキーワードの間隔を確保
         st.markdown(f"""
         <div style="margin-bottom: 36px; padding-bottom: 4px;">
             <div style="display: flex; align-items: center; margin-bottom: 6px;">
@@ -273,17 +309,15 @@ else:
 
 # --- B. トレンドマップ ---
 st.subheader("📊 トレンド四象限マップ")
-# 見出し感を強めた1行説明
 st.markdown("<div style='color: #333; font-weight: bold; font-size: 0.95em; margin-top: 8px; margin-bottom: 16px;'>🗺️ マップの見方： [左上] 先回り候補 ／ [右上] 本命 ／ [右下] 後追い ／ [左下] 見送り</div>", unsafe_allow_html=True)
 
-# マップの色分け定義と凡例順序の固定化（色彩心理学に基づく調整）
 color_discrete_map = {
-    "先読み型": "#1976D2", # S: 強い青
-    "解説型": "#0288D1",   # S: 青
-    "比較型": "#0097A7",   # S: ターコイズ
-    "まとめ型": "#388E3C", # S: 緑
-    "保留": "#9FA8DA",     # A: グレイッシュな紫 (目立ちすぎず、グレーとも違う)
-    "見送り": "#BDBDBD"    # C: グレー (危険な赤を排除)
+    "先読み型": "#1976D2", 
+    "解説型": "#0288D1",   
+    "比較型": "#0097A7",   
+    "まとめ型": "#388E3C", 
+    "保留": "#9FA8DA",     
+    "見送り": "#BDBDBD"    
 }
 category_orders = {"text_content_type": ["先読み型", "解説型", "比較型", "まとめ型", "保留", "見送り"]}
 
@@ -322,7 +356,6 @@ st.dataframe(
     use_container_width=True, hide_index=True
 )
 
-# 常時表示を避け、初期状態は閉じたアコーディオンに格納
 with st.expander("💡 投稿型の意味と使い分け", expanded=False):
     st.markdown("""
     * **先読み型:** まだ競争が浅く、これから伸びるテーマ。いち早く発信することで第一人者ポジションを狙えます。
