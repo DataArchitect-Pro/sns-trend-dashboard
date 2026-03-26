@@ -10,6 +10,7 @@ from janome.tokenizer import Tokenizer
 
 tokenizer = Tokenizer()
 
+# ストップワードの厳格な定義
 STOP_WORDS = {
     'こと', 'もの', 'これ', 'それ', 'あれ', '今日', '明日', '昨日', 'さん', 'ちゃん', 'くん', 
     'ため', 'よう', 'ところ', 'マジ', 'の', 'ん', 'お願い', '動画', '最新', '話', 'みんな', 
@@ -79,15 +80,10 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     passed_tokens = [w for w in unique_tokens if word_counts[w] >= min_freq]
     dropped_tokens = [w for w in unique_tokens if word_counts[w] < min_freq]
     
-    # 💡 条件未達の主因を1つに絞って明示的に定義する
-    if valid_posts_count < min_freq:
-        drop_reason = "投稿数不足"
-    elif len(unique_tokens) == 0:
-        drop_reason = "一般語過多"
-    elif len(passed_tokens) == 0:
-        drop_reason = "出現回数不足"
-    else:
-        drop_reason = "関連性の不足"
+    if valid_posts_count < min_freq: drop_reason = "投稿数不足"
+    elif len(unique_tokens) == 0: drop_reason = "一般語過多"
+    elif len(passed_tokens) == 0: drop_reason = "出現回数不足"
+    else: drop_reason = "関連性の不足"
 
     metadata = {
         "valid_posts_count": valid_posts_count,
@@ -117,7 +113,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
-    hist_db = get_historical_metrics(unique_tokens)
     features = []
     for w in passed_tokens:
         fx = word_platforms[w]['X']
