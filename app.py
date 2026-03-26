@@ -6,16 +6,20 @@ from logic import run_pipeline
 st.set_page_config(page_title="SNS Trend Analyzer", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 1. ヘッダー（価値と出力の2層構造・補足文の短縮）
+# 1. ヘッダー（コントラスト強化と成果訴求）
 # ==========================================
 st.title("🎯 SNSトレンド・キーワード相関分析ダッシュボード")
 
 st.markdown("**急上昇ワードの関連語を可視化し、次に狙う投稿テーマを抽出します。**")
 st.markdown("「今強い話題」と「次に来る切り口」を分けて分析し、解説型・比較型などの投稿案まで生成します。")
 
-# 補足文を短く2行に分割し、視認性を向上
-st.caption("※ 投稿本文・日時・媒体・エンゲージメントからスコアを算出します。")
-st.caption("※ 出現頻度だけでなく、成長率・関連語構造・媒体横断性も考慮します。")
+# st.captionの薄さを解消し、適度な濃さでロジックの信頼性をアピール
+st.markdown("""
+<div style="color: #444; font-size: 0.95em; margin-top: 8px; margin-bottom: 16px;">
+※ 投稿本文・日時・媒体・エンゲージメントからスコアを算出します。<br>
+※ 出現頻度だけでなく、成長率・関連語構造・媒体横断性も考慮して独自に分析します。
+</div>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # 2. サンプルデータの用意
@@ -29,19 +33,17 @@ PythonとJavaScriptの違いを比較。初心者におすすめです。,2023-1
 """
 
 # ==========================================
-# 3. サイドバー（STEP階層化と視覚的強弱）
+# 3. サイドバー（情報の圧縮と近接性の最適化）
 # ==========================================
 with st.sidebar:
     st.header("STEP 1: データ読み込み")
-    st.write("CSVを選択すると自動で分析を開始します。")
+    # 説明を極限まで絞り、行動を迷わせない
+    st.write("CSVを選択すると自動で分析を開始します。（上限200MB）")
     
-    # 英語感を消すための日本語補強
-    st.caption("👇 CSVファイルをドラッグ＆ドロップ、または下のボタンから選択 (上限200MB)")
     uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
+    st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
     
-    st.caption("🔒 アップロードデータはこのセッション内でのみ処理され、保存されません。")
-    
-    st.markdown("<br>", unsafe_allow_html=True)
+    # アップロードの直下にサンプルを配置し、行動の分断を防ぐ
     st.download_button(
         label="📥 サンプルCSVをダウンロード",
         data=SAMPLE_CSV,
@@ -58,10 +60,10 @@ with st.sidebar:
         ["X", "YouTube", "Instagram", "TikTok"],
         default=["X", "YouTube"]
     )
-    st.caption("※ CSV内の platform 列に反映されます。複数選択時は媒体横断で比較します。")
     
+    # UIラベルを短縮し、サイドバーの窮屈さを解消
     min_freq = st.slider(
-        "分析対象に含める最低出現回数", 
+        "最低出現回数（ノイズ除外）", 
         min_value=1, max_value=20, value=3, 
         help="出現回数が少なすぎる語を除外して、ノイズを減らします。"
     )
@@ -69,8 +71,7 @@ with st.sidebar:
     time_window = st.selectbox(
         "時系列比較の単位", 
         ["時間単位", "日単位", "週単位"], 
-        index=1,
-        help="時間単位: 短期バズの変化を細かく見ます / 日単位: 話題の勢い変化を日ごとに比較します / 週単位: 継続的に伸びるテーマを見ます"
+        index=1
     )
     
     st.divider()
@@ -78,21 +79,21 @@ with st.sidebar:
     st.header("STEP 3: 表示オプション")
     show_noise = st.checkbox(
         "ノイズ・スパム判定語を表示する", 
-        value=False, 
-        help="ツールが除外対象とした単語を確認したい場合にオンにしてください。"
+        value=False
     )
+    # オン/オフの判断基準を明確化
     weight_eng = st.checkbox(
         "エンゲージメントをスコアに反映する", 
         value=True,
-        help="話題量だけでなく、反応の強さ（いいね・RT等）も重視して評価します。"
+        help="反応数も加味して話題性を評価します。投稿本文だけで見たい場合はオフにしてください。"
     )
 
 # ==========================================
-# 4. メイン画面（アップロード前：成果訴求と安心感）
+# 4. メイン画面（アップロード前：期待値コントロール）
 # ==========================================
 if uploaded_file is None:
     st.info("💡 **まずはCSVをアップロードして、トレンド分析を開始してください。** \n読み込み後すぐに、関連語・注目テーマ・投稿企画候補を生成します。")
-    st.write("") # 余白調整
+    st.write("") 
     
     col_req, col_prev = st.columns([1, 1], gap="large")
     
@@ -100,50 +101,53 @@ if uploaded_file is None:
         st.subheader("📊 CSVの対応カラム")
         st.write("以下の列名を含めてアップロードしてください。（列の順序は問いません）")
         
-        # なぜその列が必要かを統一的に明記
+        # 必須・推奨・任意で視覚的な強弱（色と太さ）を明確につける
         st.markdown("""
-        **【必須】**
+        **<span style="color: #d32f2f;">【必須】</span>**
         * `text` : **投稿本文**（分析のコアデータ）
         
         **【推奨】**
-        * `posted_at` : **投稿日時**（話題の勢いを判定）
-        * `platform` : **媒体名**（媒体間の違いを比較）
-        * `eng` : **エンゲージメント数**（熱量・反応の強さを補正）
+        <div style="color: #444; font-size: 0.95em; margin-left: 20px;">
+        • <code>posted_at</code> : 投稿日時（話題の勢いを判定）<br>
+        • <code>platform</code> : 媒体名（媒体間の違いを比較）<br>
+        • <code>eng</code> : エンゲージメント数（反応の強さを補正）
+        </div>
         
-        **【任意】**
-        * `hashtags` : **ハッシュタグ**（関連テーマを抽出）
-        * `id` : **投稿ID** / `title` : **タイトル**（主題補足）
-        """)
+        <br>**<span style="color: #888;">【任意】</span>**
+        <div style="color: #888; font-size: 0.9em; margin-left: 20px;">
+        • <code>hashtags</code> : ハッシュタグ / <code>id</code> : 投稿ID / <code>title</code> : タイトル
+        </div>
+        """, unsafe_allow_html=True)
 
     with col_prev:
         st.subheader("✨ 分析結果で分かること")
-        # HTMLを完全排除し、Streamlitのネイティブ機能(枠付きコンテナ)とMarkdownで「結果サンプル」を表現
+        # インラインコードブロック(`)を使って、絶対に崩れない美しいタグ（ピル）表示を実現
         with st.container(border=True):
             st.markdown("##### 🔥 今強いキーワード")
-            st.markdown("生成AI / Python / トレンド分析")
+            st.markdown("`生成AI` `Python` `トレンド分析`")
             st.write("")
             st.markdown("##### 🌱 次に来そうなワード")
-            st.markdown("NanoBanana / Dify / RAG")
+            st.markdown("`NanoBanana` `Dify` `RAG`")
             st.write("")
             st.markdown("##### 💡 おすすめ投稿タイプ")
-            st.markdown("比較型 / 解説型 / 先読み型")
+            st.markdown("`比較型` `解説型` `先読み型`")
     
     st.divider()
     
-    # 余白を活用した利用イメージの強化
+    # 処理説明ではなく「成果フォーカス」の文言に変更
     st.subheader("🚀 分析開始後の流れ")
     col_step1, col_step2, col_step3 = st.columns(3)
     with col_step1:
-        st.info("**1. CSV読み込み**\n\nノイズを自動で除外し、テキストを単語レベルに分解します。")
+        st.info("**1. CSV読み込み**\n\nノイズを自動で除外し、不要な単語を整理します。")
     with col_step2:
-        st.info("**2. キーワード分析**\n\n成長率や単語間のネットワーク構造を計算し、スコア化します。")
+        st.info("**2. キーワード分析**\n\n話題の強さや、単語間の関連構造を分析・スコア化します。")
     with col_step3:
-        st.success("**3. 投稿案生成**\n\n分析結果に基づき、次に当たる企画の切り口を自動提案します。")
+        st.success("**3. 投稿案生成**\n\n分析結果に基づき、次に狙うべき投稿テーマを提案します。")
 
     st.stop()
 
 # ==========================================
-# 5. データ読み込みと前処理
+# 5. データ読み込みと前処理 (以降変更なし)
 # ==========================================
 try:
     df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
@@ -163,9 +167,6 @@ if df_raw.empty:
     st.warning("⚠️ 選択されたプラットフォームのデータが存在しません。サイドバーの分析設定を見直してください。")
     st.stop()
 
-# ==========================================
-# 6. 分析パイプラインの実行
-# ==========================================
 with st.spinner("AIがトレンド構造を分析し、投稿企画案を生成しています..."):
     df = run_pipeline(df_raw)
 
@@ -173,9 +174,6 @@ if df.empty:
     st.warning("⚠️ 有効なトレンドキーワードが抽出できませんでした。データ量を増やすか、テキスト内容をご確認ください。")
     st.stop()
 
-# ==========================================
-# 7. 分析結果 UI 描画
-# ==========================================
 df_display = df if show_noise else df[~df['is_noise']].copy()
 
 st.success("✅ 分析が完了しました！以下の企画案とトレンドマップをご確認ください。")
