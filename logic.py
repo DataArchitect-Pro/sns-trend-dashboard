@@ -16,6 +16,12 @@ STOP_WORDS = {
 }
 MAGIC_WORDS = {'とは', '違い', 'おすすめ', '比較', '理由', 'メリット', 'デメリット', 'やり方', '始め方', '初心者', '解説', 'まとめ'}
 
+def get_historical_metrics(tokens: list) -> dict:
+    hist = {}
+    for t in tokens:
+        hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
+    return hist
+
 def extract_tokens(text: str) -> list:
     tokens = []
     current_compound = ""
@@ -33,23 +39,21 @@ def extract_tokens(text: str) -> list:
     return list(set(tokens))
 
 def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[pd.DataFrame, dict]:
-    # 💡 日時データをパース
     if 'posted_at' in df_raw.columns:
         df_raw['posted_at'] = pd.to_datetime(df_raw['posted_at'], errors='coerce')
-    
+        
     word_counts = defaultdict(int)
     pair_counts = defaultdict(int)
     word_eng = defaultdict(int)
     word_platforms = defaultdict(lambda: {'X': 0, 'YouTube': 0})
-    word_timestamps = defaultdict(list) # 💡 単語ごとの出現時刻を記録
+    word_timestamps = defaultdict(list)
     
     spam_pattern = re.compile(r'アマギフ|プレゼント|フォロー|RT|抽選')
     valid_posts_count = 0
     
     for _, row in df_raw.iterrows():
         text = str(row.get('text', ''))
-        if spam_pattern.search(text):
-            continue
+        if spam_pattern.search(text): continue
             
         valid_posts_count += 1
         eng_score = row.get('eng', 0)
@@ -70,12 +74,9 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     unique_tokens = list(word_counts.keys())
     passed_tokens = [w for w in unique_tokens if word_counts[w] >= min_freq]
     
-    if len(unique_tokens) == 0:
-        drop_reason = "有効な固有トピック（名詞）が抽出できませんでした"
-    elif len(passed_tokens) == 0:
-        drop_reason = f"出現回数不足（最低 {min_freq} 回以上出現した語が0件でした）"
-    else:
-        drop_reason = "単語同士の関連性（共起ネットワーク）が基準に満ちませんでした"
+    if len(unique_tokens) == 0: drop_reason = "有効な固有トピック（名詞）が抽出できませんでした"
+    elif len(passed_tokens) == 0: drop_reason = f"出現回数不足（最低 {min_freq} 回以上出現した語が0件でした）"
+    else: drop_reason = "単語同士の関連性（共起ネットワーク）が基準に満ちませんでした"
 
     metadata = {
         "valid_posts_count": valid_posts_count,
@@ -85,18 +86,15 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
         "drop_reason": drop_reason
     }
 
-    if not passed_tokens:
-        return pd.DataFrame(), metadata
+    if not passed_tokens: return pd.DataFrame(), metadata
 
     G = nx.Graph()
     for (w1, w2), count in pair_counts.items():
-        if w1 not in passed_tokens or w2 not in passed_tokens:
-            continue
+        if w1 not in passed_tokens or w2 not in passed_tokens: continue
         if count >= 3:
             p_x = word_counts[w1] / max(1, valid_posts_count)
             p_y = word_counts[w2] / max(1, valid_posts_count)
             p_xy = count / max(1, valid_posts_count)
-            
             pmi = math.log10(p_xy / (p_x * p_y))
             npmi = pmi / -math.log10(p_xy)
             if npmi > 0.1:
@@ -106,6 +104,7 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
+    hist_db = get_historical_metrics(unique_tokens)
     features = []
     for w in passed_tokens:
         fx = word_platforms[w]['X']
@@ -117,26 +116,26 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             if G.has_edge(w, mw):
                 max_conversion = max(max_conversion, G[w][mw]['weight'])
                 
-        # 💡 真のSustainability（継続性）とSpike（スパイク）の計算
         timestamps = word_timestamps[w]
         duration_hours = 0.0
         if len(timestamps) > 1:
             duration_hours = (max(timestamps) - min(timestamps)).total_seconds() / 3600.0
             
-        # 継続時間は最大12時間で1.0(満点)とする
-        sustainability_raw = min(1.0, duration_hours / 12.0) if duration_hours > 0 else 0.0
+        hist = hist_db.get(w, {})
+        freq_past = hist.get('freq_past', 0)
+        freq_14d = hist.get('freq_14d', 0)
         
         features.append({
             'token': w,
             'freq_raw': word_counts[w],
-            'growth_raw': word_counts[w], # 過去データがない場合は現在の頻度をベースにする
+            'growth_raw': (word_counts[w] + 5) / (freq_past + 5),
             'centrality_raw': degree_centrality.get(w, 0.0),
             'engagement_raw': word_eng[w] / max(1, word_counts[w]),
             'bridge_raw': betweenness.get(w, 0.0),
             'cross_platform_raw': cross_platform_raw,
-            'sustainability_raw': sustainability_raw,
+            'novelty_raw': max(0.0, 1.0 - (freq_14d / 100.0)),
             'conversion_raw': max_conversion,
-            'duration_hours': duration_hours # UI判定用に保持
+            'duration_hours': duration_hours
         })
         
     return pd.DataFrame(features), metadata
@@ -154,14 +153,12 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
     for col in target_cols:
         vals = df[[col]].fillna(0).values
         if len(vals) == 1:
-            scaled = np.array([1.0]) if vals[0][0] > 0 else np.array([0.0])
-            df[col.replace('_raw', '_z').replace('_log', '_z')] = scaled
+            df[col.replace('_raw', '_z').replace('_log', '_z')] = np.array([1.0]) if vals[0][0] > 0 else np.array([0.0])
         else:
             robust_vals = robust.fit_transform(vals)
             robust_vals_clipped = np.clip(robust_vals, a_min=None, a_max=3.0)
             if robust_vals_clipped.max() == robust_vals_clipped.min():
-                scaled = np.ones_like(robust_vals_clipped).flatten() if vals[0][0] > 0 else np.zeros_like(robust_vals_clipped).flatten()
-                df[col.replace('_raw', '_z').replace('_log', '_z')] = scaled
+                df[col.replace('_raw', '_z').replace('_log', '_z')] = np.ones_like(robust_vals_clipped).flatten() if vals[0][0] > 0 else np.zeros_like(robust_vals_clipped).flatten()
             else:
                 df[col.replace('_raw', '_z').replace('_log', '_z')] = minmax.fit_transform(robust_vals_clipped).flatten()
 
@@ -174,7 +171,7 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
         else:
             df['bridge_z'] = minmax.fit_transform(bridge_vals).flatten()
     
-    for col in ['cross_platform', 'sustainability', 'conversion']:
+    for col in ['cross_platform', 'novelty', 'conversion']:
         df[f'{col}_z'] = df[f'{col}_raw'].fillna(0).clip(0, 1)
         
     return df
@@ -183,18 +180,15 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
     if df_z.empty: return df_z
     df = df_z.copy()
     
-    # 💡 継続性(Sustainability)の重みを高め、短期スパイクへのペナルティを強化
+    # 💡 スコア算出ではSustainabilityの過剰ペナルティを排除し、GrowthとNoveltyを正当に評価
     df['score_css'] = (
-        0.30 * df['freq_z'] + 0.15 * df['growth_z'] + 0.15 * df['centrality_z'] +
-        0.15 * df['cross_platform_z'] + 0.15 * df['engagement_z'] + 
-        0.10 * df['sustainability_z']
+        0.30 * df['freq_z'] + 0.20 * df['growth_z'] + 0.20 * df['centrality_z'] +
+        0.15 * df['cross_platform_z'] + 0.15 * df['engagement_z']
     ) * 100
 
-    # EOS(ポテンシャル)は「時間的な継続性」がないと高くならないように設計
     df['score_eos'] = (
-        0.20 * df['growth_z'] + 0.20 * df['bridge_z'] +
-        0.20 * df['conversion_z'] + 0.30 * df['sustainability_z'] +
-        0.10 * df['cross_platform_z']
+        0.30 * df['growth_z'] + 0.25 * df['novelty_z'] + 0.20 * df['bridge_z'] +
+        0.15 * df['conversion_z'] + 0.10 * df['cross_platform_z']
     ) * 100
 
     df['score_css'] = df['score_css'].clip(0, 100).round(1)
@@ -208,27 +202,20 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
 
     def generate_text(row):
         kw = row['token']
-        if kw in MAGIC_WORDS:
-            return "見送り", ""
-        if row['bridge_z'] >= 0.3:
-            return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
-        elif row['is_high_css'] and row['conversion_z'] >= 0.3:
-            return "解説型", f"【急上昇】今さら聞けない「{kw}」とは？"
-        elif row['is_high_eos']:
-            return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
-        elif row['is_high_css']:
-            return "まとめ型", f"【まとめ】バズり中の「{kw}」、みんなの反応"
+        if kw in MAGIC_WORDS: return "見送り", ""
+        if row['bridge_z'] >= 0.3: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
+        elif row['is_high_css'] and row['conversion_z'] >= 0.3: return "解説型", f"【急上昇】今さら聞けない「{kw}」とは？"
+        elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
+        elif row['is_high_css']: return "まとめ型", f"【まとめ】バズり中の「{kw}」、みんなの反応"
         return "見送り", ""
 
     df[['text_content_type', 'text_title_seed']] = df.apply(lambda r: pd.Series(generate_text(r)), axis=1)
     return df
 
 def run_pipeline(df_raw: pd.DataFrame, min_freq: int = 3) -> tuple[pd.DataFrame, dict]:
-    if df_raw.empty:
-        return pd.DataFrame(), {}
+    if df_raw.empty: return pd.DataFrame(), {}
     df_features, metadata = compute_network_and_features(df_raw, min_freq)
-    if df_features.empty:
-        return pd.DataFrame(), metadata
+    if df_features.empty: return pd.DataFrame(), metadata
     df_z = standardize_features(df_features)
     df_scored = compute_scores(df_z)
     df_final = apply_decision_rules(df_scored)
