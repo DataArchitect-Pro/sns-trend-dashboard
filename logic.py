@@ -17,12 +17,6 @@ STOP_WORDS = {
 MAGIC_WORDS = {'とは', '違い', 'おすすめ', '比較', '理由', 'メリット', 'デメリット', 'やり方', '始め方', '初心者', '解説', 'まとめ'}
 
 def get_historical_metrics(tokens: list) -> dict:
-    """
-    【CSVアップロード対応版】
-    本来はデータベースから過去の出現回数を引く関数ですが、
-    今回はアップロードされた未知のCSVに対応するため、一律で「新規ワード」として扱います。
-    ※実務のDB接続フェーズでは、ここをSQLクエリ等に置き換えます。
-    """
     hist = {}
     for t in tokens:
         hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
@@ -44,7 +38,7 @@ def extract_tokens(text: str) -> list:
             tokens.append(current_compound)
     return list(set(tokens))
 
-def compute_network_and_features(df_raw: pd.DataFrame) -> pd.DataFrame:
+def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[pd.DataFrame, dict]:
     word_counts = defaultdict(int)
     pair_counts = defaultdict(int)
     word_eng = defaultdict(int)
@@ -71,8 +65,25 @@ def compute_network_and_features(df_raw: pd.DataFrame) -> pd.DataFrame:
         for w1, w2 in combinations(sorted(tokens), 2):
             pair_counts[(w1, w2)] += 1
 
+    unique_tokens = list(word_counts.keys())
+    # 設定された最低出現回数（min_freq）で足切り
+    passed_tokens = [w for w in unique_tokens if word_counts[w] >= min_freq]
+    
+    # 失敗画面UIに渡すためのメタデータを作成
+    metadata = {
+        "valid_posts_count": valid_posts_count,
+        "spam_dropped_count": len(df_raw) - valid_posts_count,
+        "extracted_words_count": len(unique_tokens),
+        "passed_words_count": len(passed_tokens),
+    }
+
+    if not passed_tokens:
+        return pd.DataFrame(), metadata
+
     G = nx.Graph()
     for (w1, w2), count in pair_counts.items():
+        if w1 not in passed_tokens or w2 not in passed_tokens:
+            continue
         if count >= 3:
             p_x = word_counts[w1] / max(1, valid_posts_count)
             p_y = word_counts[w2] / max(1, valid_posts_count)
@@ -87,13 +98,10 @@ def compute_network_and_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
-    unique_tokens = list(word_counts.keys())
     hist_db = get_historical_metrics(unique_tokens)
 
     features = []
-    for w in unique_tokens:
-        if word_counts[w] < 3: continue # 少なすぎるデータでも動くよう、足切りを3に緩和
-        
+    for w in passed_tokens:
         fx = word_platforms[w]['X']
         fyt = word_platforms[w]['YouTube']
         cross_platform_raw = (2 * min(fx, fyt)) / (fx + fyt + 1)
@@ -121,12 +129,11 @@ def compute_network_and_features(df_raw: pd.DataFrame) -> pd.DataFrame:
             'conversion_raw': max_conversion
         })
         
-    return pd.DataFrame(features)
+    return pd.DataFrame(features), metadata
 
 def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
     if df_features.empty: return df_features
     df = df_features.copy()
-    
     df['freq_log'] = np.log1p(df['freq_raw'].fillna(0))
     df['engagement_log'] = np.log1p(df['engagement_raw'].fillna(0))
     
@@ -169,7 +176,7 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
 def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     df['is_noise'] = df['noise_risk_z'] >= 0.8
-    df['is_high_css'] = (df['score_css'] >= 40) & (~df['is_noise']) # 基準を少し緩和
+    df['is_high_css'] = (df['score_css'] >= 40) & (~df['is_noise']) 
     df['is_high_eos'] = (df['score_eos'] >= 50) & (~df['is_noise'])
     df['is_explainer'] = df['conversion_z'] >= 0.3
     df['is_comparative'] = df['bridge_z'] >= 0.3
@@ -179,26 +186,28 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         if row['is_noise'] or kw in MAGIC_WORDS:
             return "見送り", ""
         if row['is_comparative']:
-            return "比較型", f"📊【徹底比較】「{kw}」と競合の違い・おすすめまとめ"
+            return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
         elif row['is_high_css'] and row['is_explainer']:
-            return "解説型", f"🚨【急上昇】今さら聞けない「{kw}」とは？3分で解説"
+            return "解説型", f"【急上昇】今さら聞けない「{kw}」とは？"
         elif row['is_high_eos'] and row['novelty_z'] >= 0.5:
-            return "先読み型", f"💡【次に来る】そろそろ知っておきたい「{kw}」の始め方"
+            return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
         elif row['is_high_css']:
-            return "まとめ型", f"📝【まとめ】バズり中の「{kw}」、みんなの反応一覧"
+            return "まとめ型", f"【まとめ】バズり中の「{kw}」、みんなの反応"
         elif row['is_high_eos']:
-            return "注目型", f"🔍【注目】局地的に話題の「{kw}」をチェック"
+            return "注目型", f"【注目】局地的に話題の「{kw}」をチェック"
         return "見送り", ""
 
     df[['text_content_type', 'text_title_seed']] = df.apply(lambda r: pd.Series(generate_text(r)), axis=1)
     return df
 
-def run_pipeline(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """CSVから読み込んだDataFrameを受け取って全処理を実行"""
+def run_pipeline(df_raw: pd.DataFrame, min_freq: int = 3) -> tuple[pd.DataFrame, dict]:
     if df_raw.empty:
-        return pd.DataFrame()
-    df_features = compute_network_and_features(df_raw)
+        return pd.DataFrame(), {}
+    # min_freqを引数として渡し、メタデータも受け取る
+    df_features, metadata = compute_network_and_features(df_raw, min_freq)
+    if df_features.empty:
+        return pd.DataFrame(), metadata
     df_z = standardize_features(df_features)
     df_scored = compute_scores(df_z)
     df_final = apply_decision_rules(df_scored)
-    return df_final
+    return df_final, metadata
