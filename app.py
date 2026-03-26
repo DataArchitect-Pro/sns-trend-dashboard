@@ -247,21 +247,16 @@ if df.empty:
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
-# 💡 影響力足切り
 df_display['is_low_impact'] = df_display['engagement_raw'] < 5.0
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 
-# 💡 一般性・抽象度ペナルティ（テーマ粒度でのC落下を促す）
-# MAGIC_WORDSに含まれるか、文字数が2以下でネットワーク(広がり)が皆無の単語は抽象度が高いとみなす
 df_display['is_abstract'] = df_display['token'].isin(MAGIC_WORDS) | ((df_display['token'].str.len() <= 2) & (~has_network))
-# 単発の反応に留まっており、関連テーマとしての広がりが弱いものはテーマ粒度で足切り
 df_display['is_weak_theme'] = (df_display['score_css'] < 35) & (~has_network)
 
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_continuous = (df_display['sustainability_z'] >= 0.7) & (df_display['growth_z'] >= 0.5)
 
-# 💡 S昇格条件の厳格化：単に時間が経った未飽和語が上がらないよう、最低限のCSS(35以上)を要求
 is_high_score = ((df_display['score_eos'] >= 50) & (df_display['score_css'] >= 35)) | (df_display['score_css'] >= 55)
 is_fully_saturated = df_display['novelty_z'] <= 0.05
 
@@ -333,19 +328,26 @@ def enrich_card_data(row):
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         if action == "今すぐ初心者向け投稿": action = "今すぐ解説投稿"
         
-        # 💡 S寄りA、A寄りSの境界文言を細分化
+        # 💡 Sランク理由の厳密な優先順位づけ (新規性・競争の浅さを最重視)
         if css < 40:
             reason = "話題力は発展途上だが、ポテンシャルが極めて高く今のうちに先回りすべき本命テーマ"
+        elif novelty >= 0.5:
+            if is_continuous_flag:
+                reason = "新規性が高く数日単位で成長中。競争が浅い今のうちに先回りする価値が極めて高い先読み候補"
+            elif is_cross:
+                reason = "新規性が高く競争が浅い。媒体横断で波及し始めており、早期に先回りする価値が高い本命候補"
+            else:
+                reason = "新規性と成長率が高く、競争がまだ浅いため早期に先回りする価値が高い先読み候補"
+        elif is_continuous_flag:
+            reason = "数日単位で安定して伸びており、一時的なスパイクではない確実な継続上昇テーマ"
         elif is_cross:
             reason = "複数媒体で注目が広がっており、今すぐ仕込む価値が高い本命テーマ"
         elif is_yt_heavy:
             reason = "YouTube等で継続視聴・検索需要が強く、じっくり深掘りする企画が有効"
         elif is_x_heavy:
             reason = "X(Twitter)で先行して反応が強く、速報・拡散狙いの仕込みが有効"
-        elif is_continuous_flag:
-            reason = "数日単位で安定して伸びており、一時的なスパイクではない継続上昇テーマ"
         else:
-            reason = "新規性と成長率が高く、今すぐ先回りすべき本命テーマ"
+            reason = "成長率と話題力が高く、今すぐ着手すべき本命テーマ"
         return action, reason
         
     elif pri == "👀 A (保留)":
@@ -354,7 +356,6 @@ def enrich_card_data(row):
         elif is_fully_saturated_flag or is_saturated_flag:
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
         
-        # 💡 ポテンシャルが極めて高いがSから漏れたものを「S寄りA」として評価
         elif eos >= 55 and has_net:
             return "準本命候補", "注目候補でありポテンシャルは高いが、最優先で着手するには話題力や継続性があと一歩不足"
         
@@ -370,7 +371,6 @@ def enrich_card_data(row):
             return "監視継続", "注目候補ではあるが、観測期間や投稿数が少なくSランク昇格には届いていない"
             
     else: 
-        # 💡 Cの理由文をテーマ粒度（独立性の弱さや抽象度の高さ）で説明
         if row['token'] in MAGIC_WORDS or (is_abstract_flag):
             return "今回は見送り", "一般性・抽象度が高く、特定の投稿テーマとして成立しづらいため見送り"
         elif is_weak_theme_flag:
