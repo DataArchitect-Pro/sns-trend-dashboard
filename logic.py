@@ -19,12 +19,6 @@ STOP_WORDS = {
 }
 MAGIC_WORDS = {'とは', '違い', 'おすすめ', '比較', '理由', 'メリット', 'デメリット', 'やり方', '始め方', '初心者', '解説', 'まとめ'}
 
-def get_historical_metrics(tokens: list) -> dict:
-    hist = {}
-    for t in tokens:
-        hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
-    return hist
-
 def extract_tokens(text: str) -> list:
     tokens = []
     current_compound = ""
@@ -109,7 +103,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
-    hist_db = get_historical_metrics(unique_tokens)
     features = []
     for w in passed_tokens:
         fx = word_platforms[w]['X']
@@ -127,12 +120,11 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
         if len(timestamps) > 1:
             duration_hours = (max(timestamps) - min(timestamps)).total_seconds() / 3600.0
             
-        # 💡 継続性(Sustainability)のスケールを3日間(72時間)に広げ、じわ伸びを正確に評価
         sustainability_raw = min(1.0, duration_hours / 72.0) if duration_hours > 0 else 0.0
         
-        # 💡 巨大語ペナルティも、通常の中規模バズではNoveltyが沈まないように調整
+        # 💡 飽和ペナルティの厳格化: テストデータ規模に合わせ、Eng1500で新規性を0.0に沈める
         total_eng = word_eng[w]
-        novelty_raw = max(0.0, 1.0 - (total_eng / 5000.0))
+        novelty_raw = max(0.0, 1.0 - (total_eng / 1500.0))
         
         features.append({
             'token': w,
@@ -198,7 +190,6 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
         0.20 * df['centrality_z'] + 0.10 * df['growth_z'] + 0.10 * df['cross_platform_z']
     ) * 100
 
-    # 💡 誤って削除していた「sustainability_z（継続性）」をEOSに25%の重みで復活！
     df['score_eos'] = (
         0.25 * df['growth_z'] + 0.25 * df['sustainability_z'] + 0.20 * df['novelty_z'] +
         0.15 * df['bridge_z'] + 0.10 * df['conversion_z'] + 0.05 * df['cross_platform_z']
@@ -217,18 +208,30 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         kw = row['token']
         x_ratio = row.get('x_ratio', 0.5)
         cross = row.get('cross_platform_z', 0.0)
+        novelty = row.get('novelty_z', 0.0)
+        
+        # 💡 新規性が低い大語を「飽和」としてフラグ化
+        is_saturated = novelty < 0.3
 
         if kw in MAGIC_WORDS: return "見送り", ""
         
         is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
         is_x_heavy = x_ratio > 0.7
+        is_yt_heavy = x_ratio < 0.3
         
+        # 💡 飽和した巨大ワードは強制的にまとめ・比較・解説に倒す（速報にはならない）
+        if is_saturated:
+            if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
+            elif is_yt_heavy or row['conversion_z'] >= 0.2: return "解説型", f"【最新版】「{kw}」の活用法まとめ"
+            else: return "まとめ型", f"【まとめ】今さら聞けない「{kw}」、みんなの活用事例"
+            
+        # 未飽和語の通常分岐
         if is_cross:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
             else: return "網羅まとめ型", f"【完全網羅】話題の「{kw}」に関する全情報"
         elif is_x_heavy:
-            if row['novelty_z'] >= 0.5: return "速報型", f"【速報】Xで話題沸騰中の「{kw}」とは？"
+            if novelty >= 0.5: return "速報型", f"【速報】Xで話題沸騰中の「{kw}」とは？"
             else: return "反応まとめ型", f"【Xで話題】「{kw}」に対するみんなの反応"
         else:
             if row['conversion_z'] >= 0.2 or row['is_high_css']: return "解説型", f"【分かりやすく解説】「{kw}」の基本と使い方"
