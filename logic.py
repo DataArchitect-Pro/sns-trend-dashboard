@@ -128,7 +128,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             
         sustainability_raw = min(1.0, duration_hours / 72.0) if duration_hours > 0 else 0.0
         
-        # 💡 総Eng 800以上で飽和、2000以上で完全飽和（0.0）になるよう厳密化
         total_eng = word_eng[w]
         novelty_raw = max(0.0, 1.0 - (total_eng / 800.0))
         
@@ -209,18 +208,15 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     df['is_high_css'] = df['score_css'] >= 40
     df['is_high_eos'] = df['score_eos'] >= 50
-    
-    # 💡 飽和・継続上昇・完全飽和のフラグを明確に定義
     df['is_saturated'] = df['novelty_z'] < 0.3
-    df['is_fully_saturated'] = df['novelty_z'] <= 0.05 # 完全な巨大語（ChatGPT等）
-    df['is_continuous'] = (df['sustainability_z'] >= 0.7) & (df['growth_z'] >= 0.5)
 
     def generate_text(row):
         kw = row['token']
         x_ratio = row.get('x_ratio', 0.5)
         cross = row.get('cross_platform_z', 0.0)
         is_saturated = row.get('is_saturated', False)
-        is_continuous = row.get('is_continuous', False)
+        is_continuous = row.get('sustainability_z', 0.0) >= 0.7 and row.get('growth_z', 0.0) >= 0.5
+        is_spike = row.get('duration_hours', 1.0) < 1.0 # 💡 スパイク判定
 
         if kw in MAGIC_WORDS: return "見送り", ""
         
@@ -228,13 +224,16 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         is_yt_heavy = x_ratio < 0.3
         is_x_heavy = x_ratio > 0.7
         
-        # 💡 飽和語は強制的に解説・比較・反応まとめに落とす
+        # 💡 [最優先判定] 短時間スパイク（一発バズ）は飽和よりも優先して速報・反応まとめに落とす
+        if is_spike:
+            if row.get('novelty_z', 0) >= 0.5: return "速報型", f"【速報】話題急騰中の「{kw}」まとめ"
+            else: return "反応まとめ型", f"【局地的バズ】「{kw}」に対するみんなの反応"
+
         if is_saturated and not is_continuous:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif is_yt_heavy or row['conversion_z'] >= 0.2: return "解説型", f"【最新版】「{kw}」の活用法まとめ"
             else: return "反応まとめ型", f"【みんなの反応】「{kw}」に対する活用事例"
             
-        # 通常分岐（および継続上昇の特例）
         if is_cross:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
