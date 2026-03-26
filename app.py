@@ -21,6 +21,28 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
+# 2. サンプルデータの用意
+# ==========================================
+SAMPLE_CSV = """text,posted_at,platform,eng,id
+次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
+NanoBananaの始め方を初心者向けに解説します。,2023-10-01 10:15:00,YouTube,80,A02
+画像生成AIのNanoBanana、プロンプトのコツと始め方。,2023-10-01 10:30:00,X,60,A03
+画像生成AIのNanoBananaとは？他のAIとの違いを比較してみた。,2023-10-01 11:00:00,YouTube,120,A04
+PythonとJavaScriptの違いを徹底比較！どっちを学ぶべき？,2023-10-01 11:30:00,YouTube,300,B01
+初心者におすすめなのはPython？JavaScript？違いを解説。,2023-10-01 12:00:00,X,150,B02
+Web開発ならJavaScript、AIならPython。それぞれのメリットを比較。,2023-10-01 12:30:00,X,180,B03
+Pythonの学習ロードマップまとめ。初心者必見！,2023-10-01 13:00:00,YouTube,400,B04
+今期の覇権アニメ、神作画すぎた。みんなの反応まとめ。,2023-10-01 13:30:00,X,1500,C01
+覇権アニメ第8話の伏線考察まとめ！,2023-10-01 14:00:00,YouTube,2500,C02
+覇権アニメの最新話、海外の反応まとめ動画です。,2023-10-01 14:30:00,YouTube,3000,C03
+覇権アニメ、なぜここまで人気なのか？海外の反応と理由を解説。,2023-10-01 15:00:00,X,1200,C04
+アマギフプレゼント！フォローとRTをお願いします！,2023-10-01 15:30:00,X,0,E01
+抽選で最新ゲーム機プレゼント！RTとフォロー必須！,2023-10-01 16:00:00,X,0,E02
+今日の仕事疲れたー。早く帰宅したい。,2023-10-01 16:30:00,X,5,F01
+仕事終わらない。明日も仕事だ。,2023-10-01 17:00:00,X,2,F02
+"""
+
+# ==========================================
 # 3. サイドバー
 # ==========================================
 with st.sidebar:
@@ -30,6 +52,14 @@ with st.sidebar:
     uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
     st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
     
+    st.download_button(
+        label="📥 サンプルCSVをダウンロード",
+        data=SAMPLE_CSV,
+        file_name="sample_sns_data.csv",
+        mime="text/csv",
+        help="フォーマットの確認や、お試し分析にご利用ください。"
+    )
+
     st.divider()
 
     st.header("STEP 2: 分析設定")
@@ -146,18 +176,37 @@ if df.empty:
     col_err_left, col_err_right = st.columns([1, 1], gap="large")
     
     with col_err_left:
+        # 💡 主因を1本化して明示
         drop_reason = metadata.get('drop_reason', '条件未達')
-        if "出現回数不足" in drop_reason:
+        if drop_reason == "出現回数不足":
             main_cause = "出現回数不足"
             detail = f"抽出された候補語のうち、最低出現回数（{min_freq}回）を満たすものが0件でした。"
-        elif "固有トピック" in drop_reason:
-            main_cause = "固有トピックの不足"
-            detail = "一般語やノイズが多く、分析対象となるキーワードが抽出されませんでした。"
+        elif drop_reason == "一般語過多":
+            main_cause = "一般語過多"
+            detail = "意味の薄い一般語やノイズが多く、分析対象となる具体的なキーワードが抽出されませんでした。"
+        elif drop_reason == "投稿数不足":
+            main_cause = "投稿数不足"
+            detail = "有効な投稿数が少なく、トレンド判定に必要なデータ量に達していません。"
         else:
             main_cause = "関連性の不足"
             detail = "キーワード同士の共起（一緒に呟かれること）が基準に満ちませんでした。"
 
-        st.error(f"**🔍 最も可能性が高い原因：{main_cause}**\n\nそのため、{detail}")
+        st.error(f"**🔍 主因：{main_cause}**\n\nそのため、{detail}")
+        
+        suggested_min_freq = max(1, min_freq - 1)
+        
+        # 💡 推奨アクションの優先順位を固定
+        st.markdown(f"""
+        <div style="margin-top: 16px; margin-bottom: 8px; font-weight: bold; color: #1976d2;">💡 推奨されるアクション</div>
+        <div style="background-color: #f0f7ff; border: 2px solid #90caf9; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+            <span style="font-size: 1.05em; font-weight: bold; color: #1565c0;">1. 最低出現回数を下げる</span><br>
+            <span style="color: #333; font-size: 0.95em;">左サイドバーの設定を <b>{min_freq} → {suggested_min_freq}</b> に変更して再実行してください。</span>
+        </div>
+        <div style="margin-left: 8px; color: #333; font-size: 0.95em; line-height: 1.8;">
+            <div style="margin-bottom: 8px;"><b>2. より具体的本文のCSVに差し替える</b></div>
+            <div><b>3. 除外語表示をONにする</b></div>
+        </div>
+        """, unsafe_allow_html=True)
         
     with col_err_right:
         total_posts = len(df_raw)
@@ -178,8 +227,10 @@ if df.empty:
             <span style="color: #777; font-size: 0.85em; margin-left: 12px;">有効投稿数：<b style="color: #333;">{valid_posts}件</b></span><br><br>
             <span style="color: #555;">抽出された候補語数：</span> <b style="font-size: 1.1em;">{extracted}件</b><br>
             <span style="color: #555;">しきい値を通過した語数：</span> <b style="color: #d32f2f; font-size: 1.2em;">{passed}件</b><br><br>
+            <hr style="margin: 12px 0; border: none; border-top: 1px dashed #ccc;">
             <strong style="color: #555; font-size: 0.95em;">⚙️ 現在の設定値</strong><br>
             <span style="color: #333; font-size: 0.95em;">最低出現回数： <b style="font-size: 1.1em; color: #1976d2;">{min_freq}</b></span><br>
+            <span style="color: #666; font-size: 0.9em;">ノイズ判定語表示： <b>{'ON' if show_noise else 'OFF'}</b></span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -191,7 +242,6 @@ if df.empty:
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
-# 💡 変数をPandas Seriesとして厳密に定義し、NameErrorを完全に防ぐ
 is_low_impact = df_display['engagement_raw'] < 5.0
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_abstract = df_display['token'].isin(MAGIC_WORDS) | ((df_display['token'].str.len() <= 2) & (~has_network))
@@ -204,12 +254,10 @@ is_high_score = ((df_display['score_eos'] >= 50) & (df_display['score_css'] >= 3
 is_fully_saturated = df_display['novelty_z'] <= 0.05
 is_saturated = df_display.get('is_saturated', pd.Series(False, index=df_display.index))
 
-# 💡 データフレームに格納
 df_display['is_low_impact'] = is_low_impact
 df_display['is_abstract'] = is_abstract
 df_display['is_weak_theme'] = is_weak_theme
 
-# 💡 S条件式 (ビット演算子 '&', '~' を使用し、Series同士で計算)
 s_condition = (~is_spike) & (~is_low_impact) & (~is_fully_saturated) & (~is_abstract) & (~is_weak_theme) & is_high_score & (has_network | is_emerging | is_continuous) & ((~is_saturated) | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
@@ -278,7 +326,6 @@ def enrich_card_data(row):
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         if action == "今すぐ初心者向け投稿": action = "今すぐ解説投稿"
         
-        # 💡 Sランク理由：新語と継続上昇を明確に分離
         if novelty >= 0.5:
             if is_cross:
                 reason = "新規性が高く競争が浅い。媒体横断で波及し始めており、今のうちに先回りして仕込む価値が極めて高い先読み候補"
@@ -465,6 +512,18 @@ st.dataframe(
     df_display[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
 )
+
+# 💡 除外された単語（ブラックボックス）をUIに表示する機能
+with st.expander("🔍 抽出プロセスの詳細ログ（足切り・除外された単語）", expanded=False):
+    st.markdown(f"**▼ 最低出現回数（{min_freq}回）未満で足切りされた単語**")
+    dropped = metadata.get('dropped_tokens', [])
+    if dropped:
+        st.write(", ".join(dropped))
+    else:
+        st.write("なし")
+        
+    st.markdown("**▼ ストップワード（事前除外）として無視された一般語**")
+    st.write("「こと」「今日」「おすすめ」「便利」「普通」「日記」「やばい」などの意味が薄い一般語は、ノイズを防ぐため自然言語処理の段階で強制的に抽出対象外となります。")
 
 with st.expander("💡 投稿型の意味と使い分け", expanded=False):
     st.markdown("""
