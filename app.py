@@ -254,11 +254,14 @@ is_emerging = (df_display['novelty_z'] >= 0.5)
 is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
 
-# 💡 【重要変更】継続性だけでなく、成長率も高い場合のみ「継続上昇のS昇格」を許容する
-is_continuous = (df_display.get('sustainability_z', 0) >= 0.7) and (df_display.get('growth_z', 0) >= 0.5)
+# 💡 ValueError防止のため、ビット演算子 & を使用
+is_continuous = (df_display['sustainability_z'] >= 0.7) & (df_display['growth_z'] >= 0.5)
 
-# 💡 飽和語は原則Sブロックだが、is_continuous(継続上昇特例)の条件を満たせばSに救済される
-s_condition = (~is_spike) & (~df_display['is_low_impact']) & is_high_score & (has_network | is_emerging | is_continuous) & ((~df_display.get('is_saturated', False)) | is_continuous)
+# 💡 巨大すぎる完全飽和(ChatGPTなど)は継続上昇でも絶対にSに上げないためのフラグ
+is_fully_saturated = df_display['novelty_z'] <= 0.05
+
+# 💡 S条件の厳密化：完全飽和はSブロック、やや飽和(0.1~0.3)なら継続特例でS昇格を許容
+s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~is_fully_saturated) & is_high_score & (has_network | is_emerging | is_continuous) & ((~df_display.get('is_saturated', False)) | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 top3_indices = s_candidates.head(3).index
@@ -282,13 +285,13 @@ def set_priority(row):
 
 df_display['priority'] = df_display.apply(set_priority, axis=1)
 
-# 飽和語は強制的に保留扱いの投稿型に上書き
+# 💡 飽和語のAランクは、速報などを防ぐため強制的に保留型の投稿に上書き
 df_display['text_content_type'] = df_display.apply(
     lambda r: "保留" if r['priority'] == "👀 A (保留)" and not r.get('is_saturated', False) else r['text_content_type'], 
     axis=1
 )
 
-# 💡 一覧表に「スパイクペナルティ（一発バズ）」の可視化カラムを追加
+# 💡 一覧表の可視化フラグ
 df_display['spike_penalty'] = is_spike.apply(lambda x: "作動(一発バズ)" if x else "なし")
 df_display['saturated_penalty'] = df_display.get('is_saturated', False).apply(lambda x: "作動(S昇格不可)" if x else "なし")
 
@@ -304,8 +307,8 @@ def enrich_card_data(row):
     
     is_spike_flag = duration < 1.0
     is_saturated_flag = row.get('is_saturated', False)
+    is_fully_saturated_flag = novelty <= 0.05
     is_low_impact_flag = row.get('is_low_impact', False)
-    # Sの理由文に使う継続上昇フラグ
     is_continuous_flag = row.get('sustainability_z', 0) >= 0.7 and row.get('growth_z', 0) >= 0.5
     is_x_heavy = x_ratio > 0.7
 
@@ -313,7 +316,7 @@ def enrich_card_data(row):
         action = "今すぐ" + original_ctype.replace('型', '投稿')
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         
-        # 💡 Sランク：継続上昇（パターン8）専用の理由文
+        # 💡 Sランク理由の分岐
         if is_continuous_flag:
             reason = "数日単位で安定して伸びており、一時的なスパイクではない継続上昇テーマ"
         elif novelty >= 0.5:
@@ -327,13 +330,13 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        # 💡 Aランク：優先度を「スパイク」＞「飽和」＞「惜しい」の順で評価
-        if is_spike_flag:
-            return "継続確認待ち", "短期間の局地的な反応（スパイク）のため、トレンドが継続するか様子見"
-        elif is_saturated_flag:
+        # 💡 Aランク：優先度を「完全飽和(巨大語)」＞「スパイク(一発バズ)」＞「惜しい継続」の順で評価
+        if is_fully_saturated_flag or is_saturated_flag:
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
+        elif is_spike_flag:
+            return "継続確認待ち", "短期間の局地的な反応（スパイク）のため、トレンドが継続するか様子見"
         elif is_continuous_flag:
-            return "準本命候補", "数日単位で継続上昇しているが、Sランク昇格には話題力や広がりがあと一歩不足"
+            return "準本命候補", "数日単位で安定して成長しているが、Sランク昇格には話題力や広がりがあと一歩不足"
         elif not has_net:
             return "様子見", "反応や新規性はあるが、関連テーマへの広がりが弱く今すぐ仕込むには根拠不足"
         else:
@@ -397,12 +400,12 @@ st.markdown(f"""
 if count_s == 0:
     if count_a > 0:
         a_reasons = df_display[df_display['priority'] == "👀 A (保留)"]['reason'].tolist()
-        if any("スパイク" in r for r in a_reasons):
+        if any("後追いリスク" in r for r in a_reasons):
+            msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
+        elif any("スパイク" in r for r in a_reasons):
             msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続するか不透明なため、今回は「保留」と判定しました。"
         elif any("継続上昇" in r for r in a_reasons):
             msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
-        elif any("後追いリスク" in r for r in a_reasons):
-            msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
         else:
             msg = "注目候補は抽出されましたが、最優先で着手すべき基準には届かず、「保留」判定となりました。"
     else:
@@ -475,7 +478,7 @@ view_cols = {
     'sustainability_z': '継続性',
     'conversion_z': '広がり',
     'cross_platform_z': '媒体横断性', 
-    'spike_penalty': 'スパイク判定', # 💡 追加：一発バズの可視化
+    'spike_penalty': 'スパイク判定', 
     'saturated_penalty': '飽和判定' 
 }
 
