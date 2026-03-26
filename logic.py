@@ -77,16 +77,24 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
 
     unique_tokens = list(word_counts.keys())
     passed_tokens = [w for w in unique_tokens if word_counts[w] >= min_freq]
+    dropped_tokens = [w for w in unique_tokens if word_counts[w] < min_freq]
     
-    if len(unique_tokens) == 0: drop_reason = "有効な固有トピック（名詞）が抽出できませんでした"
-    elif len(passed_tokens) == 0: drop_reason = f"出現回数不足（最低 {min_freq} 回以上出現した語が0件でした）"
-    else: drop_reason = "単語同士の関連性（共起ネットワーク）が基準に満ちませんでした"
+    # 💡 条件未達の主因を1つに絞って明示的に定義する
+    if valid_posts_count < min_freq:
+        drop_reason = "投稿数不足"
+    elif len(unique_tokens) == 0:
+        drop_reason = "一般語過多"
+    elif len(passed_tokens) == 0:
+        drop_reason = "出現回数不足"
+    else:
+        drop_reason = "関連性の不足"
 
     metadata = {
         "valid_posts_count": valid_posts_count,
         "spam_dropped_count": len(df_raw) - valid_posts_count,
         "extracted_words_count": len(unique_tokens),
         "passed_words_count": len(passed_tokens),
+        "dropped_tokens": dropped_tokens,
         "drop_reason": drop_reason
     }
 
@@ -109,6 +117,7 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
+    hist_db = get_historical_metrics(unique_tokens)
     features = []
     for w in passed_tokens:
         fx = word_platforms[w]['X']
@@ -227,7 +236,6 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         is_yt_heavy = x_ratio < 0.3
         is_x_heavy = x_ratio > 0.7
         
-        # [最優先判定] 短時間スパイク（一発バズ）は「速報」に固定
         if is_spike:
             if novelty >= 0.5: return "速報型", f"【速報】話題急騰中の「{kw}」まとめ"
             else: return "反応まとめ型", f"【局地的バズ】「{kw}」に対するみんなの反応"
@@ -237,13 +245,11 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
             elif is_yt_heavy or row['conversion_z'] >= 0.2: return "解説型", f"【最新版】「{kw}」の活用法まとめ"
             else: return "反応まとめ型", f"【みんなの反応】「{kw}」に対する活用事例"
             
-        # 未飽和語の通常分岐 (新語=Novelty>=0.5 を先読み/解説に寄せる)
         if is_cross:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
-            elif novelty >= 0.5 or row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
+            elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
             else: return "網羅まとめ型", f"【完全網羅】話題の「{kw}」に関する全情報"
         elif is_x_heavy:
-            # 💡 新語は速報ではなく「先読み」に寄せる。継続上昇は「解説」に寄せる。
             if novelty >= 0.5: return "先読み型", f"【次に来る】Xで密かに話題の「{kw}」とは？"
             elif is_continuous: return "解説型", f"【解説】Xでじわじわ伸びている「{kw}」について"
             else: return "反応まとめ型", f"【Xで話題】「{kw}」に対するみんなの反応"
