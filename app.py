@@ -6,12 +6,16 @@ from logic import run_pipeline
 st.set_page_config(page_title="SNS Trend Analyzer", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 1. ヘッダー（価値と出力の2層構造）
+# 1. ヘッダー（価値と出力の2層構造・補足文の短縮）
 # ==========================================
 st.title("🎯 SNSトレンド・キーワード相関分析ダッシュボード")
-st.markdown("""
-**急上昇ワードの関連語を可視化し、次に狙う投稿テーマを抽出します。** 「今強い話題」と「次に来る切り口」を分けて分析し、解説型・比較型などの投稿案まで生成します。
-""")
+
+st.markdown("**急上昇ワードの関連語を可視化し、次に狙う投稿テーマを抽出します。**")
+st.markdown("「今強い話題」と「次に来る切り口」を分けて分析し、解説型・比較型などの投稿案まで生成します。")
+
+# 補足文を短く2行に分割し、視認性を向上
+st.caption("※ 投稿本文・日時・媒体・エンゲージメントからスコアを算出します。")
+st.caption("※ 出現頻度だけでなく、成長率・関連語構造・媒体横断性も考慮します。")
 
 # ==========================================
 # 2. サンプルデータの用意
@@ -25,36 +29,37 @@ PythonとJavaScriptの違いを比較。初心者におすすめです。,2023-1
 """
 
 # ==========================================
-# 3. サイドバー（STEP化と安心設計）
+# 3. サイドバー（STEP階層化と視覚的強弱）
 # ==========================================
 with st.sidebar:
     st.header("STEP 1: データ読み込み")
-    st.markdown("CSVを選択すると自動で分析を開始します。")
-    uploaded_file = st.file_uploader("投稿CSVをアップロード", type=["csv"], label_visibility="collapsed")
+    st.write("CSVを選択すると自動で分析を開始します。")
     
-    # セキュリティ文言をアップロード直下に配置し、コントラストを調整
-    st.markdown("<span style='color: #666; font-size: 0.85em;'>🔒 データはこのセッション内でのみ処理され、保存されません。</span>", unsafe_allow_html=True)
+    # 英語感を消すための日本語補強
+    st.caption("👇 CSVファイルをドラッグ＆ドロップ、または下のボタンから選択 (上限200MB)")
+    uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
+    
+    st.caption("🔒 アップロードデータはこのセッション内でのみ処理され、保存されません。")
     
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("**▼ お試し用データ**")
     st.download_button(
-        label="サンプルCSVをダウンロード",
+        label="📥 サンプルCSVをダウンロード",
         data=SAMPLE_CSV,
         file_name="sample_sns_data.csv",
         mime="text/csv",
         help="フォーマットの確認や、お試し分析にご利用ください。"
     )
 
-    st.markdown("---")
+    st.divider()
+
     st.header("STEP 2: 分析設定")
-    
     target_platforms = st.multiselect(
         "分析対象プラットフォーム",
         ["X", "YouTube", "Instagram", "TikTok"],
         default=["X", "YouTube"]
     )
+    st.caption("※ CSV内の platform 列に反映されます。複数選択時は媒体横断で比較します。")
     
-    # 用語と補足をユーザーフレンドリーに修正
     min_freq = st.slider(
         "分析対象に含める最低出現回数", 
         min_value=1, max_value=20, value=3, 
@@ -68,60 +73,73 @@ with st.sidebar:
         help="時間単位: 短期バズの変化を細かく見ます / 日単位: 話題の勢い変化を日ごとに比較します / 週単位: 継続的に伸びるテーマを見ます"
     )
     
-    st.markdown("---")
-    st.header("🛡️ ノイズ制御")
-    # ネガティブな印象を拭い、監査ツールとしての見せ方に変更
-    show_noise = st.checkbox("ノイズ・スパム判定語を表示する", value=False, help="ツールが除外対象とした単語を確認したい場合にオンにしてください。")
-    weight_eng = st.checkbox("エンゲージメント(熱量)を重視する", value=True)
+    st.divider()
+
+    st.header("STEP 3: 表示オプション")
+    show_noise = st.checkbox(
+        "ノイズ・スパム判定語を表示する", 
+        value=False, 
+        help="ツールが除外対象とした単語を確認したい場合にオンにしてください。"
+    )
+    weight_eng = st.checkbox(
+        "エンゲージメントをスコアに反映する", 
+        value=True,
+        help="話題量だけでなく、反応の強さ（いいね・RT等）も重視して評価します。"
+    )
 
 # ==========================================
-# 4. メイン画面（アップロード前：成果訴求と信頼感）
+# 4. メイン画面（アップロード前：成果訴求と安心感）
 # ==========================================
 if uploaded_file is None:
-    # 行動を強制するCTA
     st.info("💡 **まずはCSVをアップロードして、トレンド分析を開始してください。** \n読み込み後すぐに、関連語・注目テーマ・投稿企画候補を生成します。")
+    st.write("") # 余白調整
     
-    # 分析の信頼感を高めるロジックの提示
-    st.markdown("<span style='color: #555; font-size: 0.9em;'>※ 投稿本文・投稿日時・媒体・エンゲージメントからスコアを算出します。単なる出現頻度だけでなく、**成長率・関連語ネットワークの構造・媒体横断性**も考慮して独自に分析します。</span>", unsafe_allow_html=True)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    col_req, col_prev = st.columns([1, 1.2], gap="large")
+    col_req, col_prev = st.columns([1, 1], gap="large")
     
     with col_req:
         st.subheader("📊 CSVの対応カラム")
-        st.markdown("以下の列名を含めてアップロードしてください。（列の順序は問いません）")
+        st.write("以下の列名を含めてアップロードしてください。（列の順序は問いません）")
         
-        st.markdown("**【必須】**")
-        st.markdown("- `text` : 投稿本文")
+        # なぜその列が必要かを統一的に明記
+        st.markdown("""
+        **【必須】**
+        * `text` : **投稿本文**（分析のコアデータ）
         
-        st.markdown("**【推奨】**")
-        st.markdown("- `posted_at` : 投稿日時")
-        st.markdown("- `platform` : 媒体名（X / YouTubeなど）")
-        st.markdown("- `eng` : エンゲージメント数")
+        **【推奨】**
+        * `posted_at` : **投稿日時**（話題の勢いを判定）
+        * `platform` : **媒体名**（媒体間の違いを比較）
+        * `eng` : **エンゲージメント数**（熱量・反応の強さを補正）
         
-        st.markdown("**【任意】**")
-        st.markdown("- `id` : 投稿ID / `hashtags` : ハッシュタグ / `title` : タイトル")
+        **【任意】**
+        * `hashtags` : **ハッシュタグ**（関連テーマを抽出）
+        * `id` : **投稿ID** / `title` : **タイトル**（主題補足）
+        """)
 
     with col_prev:
         st.subheader("✨ 分析結果で分かること")
-        # 具体例を混ぜて期待値をコントロール
-        st.markdown("""
-        <div style="border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; background-color: #f9f9fc;">
-            <strong>🔥 今強いキーワード</strong><br>
-            <span style="font-size: 0.9em; color: #555;">圧倒的な話題量と熱量を持つトレンド語。</span><br>
-            <span style="font-size: 0.85em; color: #0066cc;">例：生成AI / Python / トレンド</span><br><br>
-            
-            <strong>🌱 次に来そうなワード</strong><br>
-            <span style="font-size: 0.9em; color: #555;">局地的に急成長しているブルーオーシャン。</span><br>
-            <span style="font-size: 0.85em; color: #0066cc;">例：NanoBanana / Dify / RAG</span><br><br>
-            
-            <strong>💡 推奨投稿タイプとタイトル案</strong><br>
-            <span style="font-size: 0.9em; color: #555;">関連語の構造から、最適な企画切り口を提案。</span><br>
-            <span style="font-size: 0.85em; color: #0066cc;">例：【徹底比較】〇〇と△△の違い (比較型) / 今さら聞けない〇〇 (解説型)</span>
-        </div>
-        """, unsafe_allow_html=True)
+        # HTMLを完全排除し、Streamlitのネイティブ機能(枠付きコンテナ)とMarkdownで「結果サンプル」を表現
+        with st.container(border=True):
+            st.markdown("##### 🔥 今強いキーワード")
+            st.markdown("生成AI / Python / トレンド分析")
+            st.write("")
+            st.markdown("##### 🌱 次に来そうなワード")
+            st.markdown("NanoBanana / Dify / RAG")
+            st.write("")
+            st.markdown("##### 💡 おすすめ投稿タイプ")
+            st.markdown("比較型 / 解説型 / 先読み型")
     
+    st.divider()
+    
+    # 余白を活用した利用イメージの強化
+    st.subheader("🚀 分析開始後の流れ")
+    col_step1, col_step2, col_step3 = st.columns(3)
+    with col_step1:
+        st.info("**1. CSV読み込み**\n\nノイズを自動で除外し、テキストを単語レベルに分解します。")
+    with col_step2:
+        st.info("**2. キーワード分析**\n\n成長率や単語間のネットワーク構造を計算し、スコア化します。")
+    with col_step3:
+        st.success("**3. 投稿案生成**\n\n分析結果に基づき、次に当たる企画の切り口を自動提案します。")
+
     st.stop()
 
 # ==========================================
