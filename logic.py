@@ -16,12 +16,6 @@ STOP_WORDS = {
 }
 MAGIC_WORDS = {'とは', '違い', 'おすすめ', '比較', '理由', 'メリット', 'デメリット', 'やり方', '始め方', '初心者', '解説', 'まとめ'}
 
-def get_historical_metrics(tokens: list) -> dict:
-    hist = {}
-    for t in tokens:
-        hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
-    return hist
-
 def extract_tokens(text: str) -> list:
     tokens = []
     current_compound = ""
@@ -89,7 +83,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     if not passed_tokens: return pd.DataFrame(), metadata
 
     G = nx.Graph()
-    # 💡 ハードコーディング(>=3)を撤廃し、小規模テストデータでもネットワークが形成されるように緩和
     pair_min = max(2, min_freq - 1)
     for (w1, w2), count in pair_counts.items():
         if w1 not in passed_tokens or w2 not in passed_tokens: continue
@@ -106,7 +99,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
-    hist_db = get_historical_metrics(unique_tokens)
     features = []
     for w in passed_tokens:
         fx = word_platforms[w]['X']
@@ -123,23 +115,22 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
         if len(timestamps) > 1:
             duration_hours = (max(timestamps) - min(timestamps)).total_seconds() / 3600.0
             
-        hist = hist_db.get(w, {})
-        freq_past = hist.get('freq_past', 0)
-        freq_14d = hist.get('freq_14d', 0)
-        
-        # 継続時間は最大12時間で1.0(満点)とする
         sustainability_raw = min(1.0, duration_hours / 12.0) if duration_hours > 0 else 0.0
+        
+        # 💡 【重要改修】総エンゲージメントが高い＝既に認知が取り切られた飽和巨大ワードとして、新規性をダイナミックに減点
+        total_eng = word_eng[w]
+        novelty_raw = max(0.0, 1.0 - (total_eng / 1000.0))
         
         features.append({
             'token': w,
             'freq_raw': word_counts[w],
-            'growth_raw': word_counts[w], # モックのため頻度をベース
+            'growth_raw': word_counts[w], 
             'centrality_raw': degree_centrality.get(w, 0.0),
             'engagement_raw': word_eng[w] / max(1, word_counts[w]),
             'bridge_raw': betweenness.get(w, 0.0),
             'cross_platform_raw': cross_platform_raw,
             'sustainability_raw': sustainability_raw,
-            'novelty_raw': max(0.0, 1.0 - (freq_14d / 100.0)),
+            'novelty_raw': novelty_raw, # 飽和語はここが0.0に沈む
             'conversion_raw': max_conversion,
             'duration_hours': duration_hours
         })
@@ -187,9 +178,8 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
     df = df_z.copy()
     
     df['score_css'] = (
-        0.30 * df['freq_z'] + 0.15 * df['growth_z'] + 0.15 * df['centrality_z'] +
-        0.15 * df['cross_platform_z'] + 0.15 * df['engagement_z'] + 
-        0.10 * df['sustainability_z']
+        0.30 * df['freq_z'] + 0.20 * df['growth_z'] + 0.20 * df['centrality_z'] +
+        0.15 * df['cross_platform_z'] + 0.15 * df['engagement_z']
     ) * 100
 
     df['score_eos'] = (
