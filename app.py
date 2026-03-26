@@ -245,13 +245,17 @@ if df.empty:
 # 6. 結果の事後処理 (ランキング・サマリーの構築)
 # ==========================================
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
+df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
-# 💡 Sランク候補の厳格化: ネットワーク(文脈)の広がりと時間的継続性の両方を要求
-has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0) | (df_display['centrality_z'] > 0)
-has_sustainability = df_display['duration_hours'] >= 1.0 # 1時間以上の継続性があるか
-is_high_score = (df_display['score_eos'] >= 55) | (df_display['score_css'] >= 55)
+# 💡 明確化された S/A/C の境界ルール
+has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
+is_spike = df_display['duration_hours'] < 1.0  # 1時間未満はスパイクと判定
+is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
 
-s_candidates = df_display[has_network & has_sustainability & is_high_score].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
+# Sランク: スコアが高く、広がり(Network)があり、短時間のスパイクではない
+s_condition = has_network & (~is_spike) & is_high_score
+
+s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 
 top3_indices = s_candidates.head(3).index
 df_display['Rank_Num'] = ""
@@ -260,12 +264,11 @@ if len(top3_indices) > 0: df_display.loc[top3_indices[0], 'Rank_Num'] = "①"
 if len(top3_indices) > 1: df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
 if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 
-# 💡 AとCの境界線ルールの実装
 def set_priority(row):
     if row['Rank_Num'] != "": 
         return "🔥 S (最優先)"
-    # エンゲージメント・頻度が非常に高い（スパイク等）場合はCに落とさずAに残す
-    if row['score_css'] >= 45 or row['engagement_z'] >= 0.7 or row['freq_z'] >= 0.7: 
+    # Sから漏れたもので、高スコア・高Eng・スパイク等の要素があるものはAに救済
+    if row['score_css'] >= 45 or row['score_eos'] >= 45 or row['engagement_z'] >= 0.7 or row['freq_z'] >= 0.7: 
         return "👀 A (保留)"
     return "➖ C (見送り)"
 
@@ -276,12 +279,12 @@ df_display['text_content_type'] = df_display.apply(
     axis=1
 )
 
-# 💡 AとCの理由の明文化（時間推移やネットワークの状況に基づく）
 def enrich_card_data(row):
     original_ctype = row['text_content_type']
     pri = row['priority']
     rank = row['Rank_Num']
     duration = row.get('duration_hours', 0)
+    has_net = (row.get('conversion_z', 0) > 0) or (row.get('bridge_z', 0) > 0)
     
     if pri == "🔥 S (最優先)":
         if rank == "①": reason = "圧倒的な成長率と新規性を持ち、今すぐ先回りすべき本命"
@@ -296,12 +299,13 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        if duration < 1.0: # 短期スパイク判定
-            return "監視継続", "短期間の局地的な反応（スパイク）のため、継続するか様子見"
-        elif row['score_css'] >= 50:
-            return "監視継続", "現状は注目されているが、ネットワークの広がりが弱く先回り余地が限定的"
+        # 💡 Aランクになった理由を明確に提示
+        if duration < 1.0:
+            return "様子見", "短期間の局地的な反応（スパイク）のため、継続するか様子見"
+        elif not has_net:
+            return "監視継続", "反応はあるが、関連テーマへの広がりが弱く今すぐ仕込むには根拠不足"
         else:
-            return "様子見", "局地的な反応はあるが、ポテンシャル(EOS)の上昇待ち"
+            return "監視継続", "注目候補ではあるが、観測期間が短く継続判定に届いていないため様子見"
             
     else: 
         if duration < 1.0:
@@ -351,11 +355,19 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if count_s == 0:
+    # 💡 Aランクが残った理由を動的に取得し、サマリー文を具体化
     if count_a > 0:
-        msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続性と広がりが限定的なため、今回は「保留」と判定しました。"
+        a_reasons = df_display[df_display['priority'] == "👀 A (保留)"]['reason'].tolist()
+        if any("スパイク" in r for r in a_reasons):
+            msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続するか不透明なため、今回は「保留」と判定しました。"
+        elif any("広がりが弱く" in r for r in a_reasons):
+            msg = "一部の語に反応はありますが、関連テーマへの広がりが弱く、今すぐ仕込むには根拠不足のため「保留」と判定しました。"
+        else:
+            msg = "注目候補は抽出されましたが、最優先で着手すべき基準には届かず、「保留」判定となりました。"
     else:
         msg = "一部の語に反応は観測されましたが、継続性と広がりが弱く、今回は「見送り」判定となりました。"
-    st.info(f"💡 **現在、今すぐ着手すべき強い推奨案（Sランク）はありません。**\n\n{msg}")
+        
+    st.info(f"💡 **現在、今すぐ着手すべき強い推奨案（Sランク）はありません。**\n\n{msg}\n\n※ 詳細な根拠は下部の一覧表でご確認ください。")
 else:
     top3_ideas = df_display[df_display['Rank_Num'] != ""].sort_values(by='Rank_Num')
     for _, row in top3_ideas.iterrows():
@@ -415,6 +427,7 @@ view_cols = {
     'score_eos': 'ポテンシャル(EOS)', 
 }
 
+# 💡 S=0のケースでも、この一覧表で「なぜAになったか」「なぜCになったか」の詳細な根拠が必ず表示されます
 st.dataframe(
     df_display[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
