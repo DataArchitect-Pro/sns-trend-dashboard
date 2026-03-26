@@ -10,25 +10,38 @@ from janome.tokenizer import Tokenizer
 
 tokenizer = Tokenizer()
 
+# 💡 一般語・意味薄語のストップワードを実務レベルに超拡張
 STOP_WORDS = {
-    'こと', 'もの', 'これ', 'それ', '今日', 'さん', 'ちゃん', 'ため', 'よう', 'ところ', 
-    'マジ', 'の', 'ん', 'お願い', '動画', '最新', '話', 'みんな', '反応', '一覧', '最高'
+    'こと', 'もの', 'これ', 'それ', 'あれ', '今日', '明日', '昨日', 'さん', 'ちゃん', 'くん', 
+    'ため', 'よう', 'ところ', 'マジ', 'の', 'ん', 'お願い', '動画', '最新', '話', 'みんな', 
+    '反応', '一覧', '最高', '普通', '日記', 'おすすめ', 'すごい', 'やばい', '便利', '私', '俺', 
+    '僕', '自分', '人', '方', '何', '事', '時', '中', '前', '後', '気', '感', '感じ', 'みたい',
+    'やつ', 'とき', 'そう', 'わけ', '内容', '情報', '結果', '発表', '本当', '今期', '最近', '今回'
 }
 MAGIC_WORDS = {'とは', '違い', 'おすすめ', '比較', '理由', 'メリット', 'デメリット', 'やり方', '始め方', '初心者', '解説', 'まとめ'}
+
+def get_historical_metrics(tokens: list) -> dict:
+    hist = {}
+    for t in tokens:
+        hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
+    return hist
 
 def extract_tokens(text: str) -> list:
     tokens = []
     current_compound = ""
     for token in tokenizer.tokenize(str(text)):
-        if token.part_of_speech.startswith('名詞'):
+        pos = token.part_of_speech.split(',')
+        # 代名詞や非自立語を弾きつつ名詞を抽出
+        if pos[0] == '名詞' and pos[1] not in ['代名詞', '非自立', '数']:
             current_compound += token.surface
         else:
             if current_compound:
-                if len(current_compound) > 1 and current_compound not in STOP_WORDS:
+                # 💡 1文字、ひらがな2文字以下、ストップワードを徹底除外
+                if len(current_compound) > 1 and current_compound not in STOP_WORDS and not re.fullmatch(r'[ぁ-ん]{1,2}', current_compound):
                     tokens.append(current_compound)
                 current_compound = ""
     if current_compound:
-        if len(current_compound) > 1 and current_compound not in STOP_WORDS:
+        if len(current_compound) > 1 and current_compound not in STOP_WORDS and not re.fullmatch(r'[ぁ-ん]{1,2}', current_compound):
             tokens.append(current_compound)
     return list(set(tokens))
 
@@ -99,6 +112,7 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
+    hist_db = get_historical_metrics(unique_tokens)
     features = []
     for w in passed_tokens:
         fx = word_platforms[w]['X']
@@ -117,7 +131,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             
         sustainability_raw = min(1.0, duration_hours / 12.0) if duration_hours > 0 else 0.0
         
-        # 💡 【重要改修】総エンゲージメントが高い＝既に認知が取り切られた飽和巨大ワードとして、新規性をダイナミックに減点
         total_eng = word_eng[w]
         novelty_raw = max(0.0, 1.0 - (total_eng / 1000.0))
         
@@ -130,7 +143,7 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             'bridge_raw': betweenness.get(w, 0.0),
             'cross_platform_raw': cross_platform_raw,
             'sustainability_raw': sustainability_raw,
-            'novelty_raw': novelty_raw, # 飽和語はここが0.0に沈む
+            'novelty_raw': novelty_raw,
             'conversion_raw': max_conversion,
             'duration_hours': duration_hours
         })
