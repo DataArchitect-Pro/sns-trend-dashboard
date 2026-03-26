@@ -6,14 +6,13 @@ from logic import run_pipeline
 st.set_page_config(page_title="SNS Trend Analyzer", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 1. ヘッダー（コントラスト強化と成果訴求）
+# 1. ヘッダー
 # ==========================================
 st.title("🎯 SNSトレンド・キーワード相関分析ダッシュボード")
 
 st.markdown("**急上昇ワードの関連語を可視化し、次に狙う投稿テーマを抽出します。**")
 st.markdown("「今強い話題」と「次に来る切り口」を分けて分析し、解説型・比較型などの投稿案まで生成します。")
 
-# st.captionの薄さを解消し、適度な濃さでロジックの信頼性をアピール
 st.markdown("""
 <div style="color: #444; font-size: 0.95em; margin-top: 8px; margin-bottom: 16px;">
 ※ 投稿本文・日時・媒体・エンゲージメントからスコアを算出します。<br>
@@ -22,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意
+# 2. サンプルデータの用意 (リッチ版)
 # ==========================================
 SAMPLE_CSV = """text,posted_at,platform,eng,id
 次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
@@ -44,17 +43,15 @@ Pythonの学習ロードマップまとめ。初心者必見！,2023-10-01 13:00
 """
 
 # ==========================================
-# 3. サイドバー（情報の圧縮と近接性の最適化）
+# 3. サイドバー
 # ==========================================
 with st.sidebar:
     st.header("STEP 1: データ読み込み")
-    # 説明を極限まで絞り、行動を迷わせない
     st.write("CSVを選択すると自動で分析を開始します。（上限200MB）")
     
     uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
     st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
     
-    # アップロードの直下にサンプルを配置し、行動の分断を防ぐ
     st.download_button(
         label="📥 サンプルCSVをダウンロード",
         data=SAMPLE_CSV,
@@ -72,7 +69,6 @@ with st.sidebar:
         default=["X", "YouTube"]
     )
     
-    # UIラベルを短縮し、サイドバーの窮屈さを解消
     min_freq = st.slider(
         "最低出現回数（ノイズ除外）", 
         min_value=1, max_value=20, value=3, 
@@ -88,11 +84,7 @@ with st.sidebar:
     st.divider()
 
     st.header("STEP 3: 表示オプション")
-    show_noise = st.checkbox(
-        "ノイズ・スパム判定語を表示する", 
-        value=False
-    )
-    # オン/オフの判断基準を明確化
+    show_noise = st.checkbox("ノイズ・スパム判定語を表示する", value=False)
     weight_eng = st.checkbox(
         "エンゲージメントをスコアに反映する", 
         value=True,
@@ -100,7 +92,7 @@ with st.sidebar:
     )
 
 # ==========================================
-# 4. メイン画面（アップロード前：期待値コントロール）
+# 4. メイン画面（アップロード前）
 # ==========================================
 if uploaded_file is None:
     st.info("💡 **まずはCSVをアップロードして、トレンド分析を開始してください。** \n読み込み後すぐに、関連語・注目テーマ・投稿企画候補を生成します。")
@@ -112,7 +104,6 @@ if uploaded_file is None:
         st.subheader("📊 CSVの対応カラム")
         st.write("以下の列名を含めてアップロードしてください。（列の順序は問いません）")
         
-        # 必須・推奨・任意で視覚的な強弱（色と太さ）を明確につける
         st.markdown("""
         **<span style="color: #d32f2f;">【必須】</span>**
         * `text` : **投稿本文**（分析のコアデータ）
@@ -132,7 +123,6 @@ if uploaded_file is None:
 
     with col_prev:
         st.subheader("✨ 分析結果で分かること")
-        # インラインコードブロック(`)を使って、絶対に崩れない美しいタグ（ピル）表示を実現
         with st.container(border=True):
             st.markdown("##### 🔥 今強いキーワード")
             st.markdown("`生成AI` `Python` `トレンド分析`")
@@ -145,7 +135,6 @@ if uploaded_file is None:
     
     st.divider()
     
-    # 処理説明ではなく「成果フォーカス」の文言に変更
     st.subheader("🚀 分析開始後の流れ")
     col_step1, col_step2, col_step3 = st.columns(3)
     with col_step1:
@@ -158,7 +147,7 @@ if uploaded_file is None:
     st.stop()
 
 # ==========================================
-# 5. データ読み込みと前処理 (以降変更なし)
+# 5. データ読み込みと実行
 # ==========================================
 try:
     df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
@@ -166,53 +155,137 @@ except UnicodeDecodeError:
     df_raw = pd.read_csv(uploaded_file, encoding='cp932')
 
 if 'text' not in df_raw.columns:
-    st.error("❌ **エラー:** CSVファイルに必須カラム `text`（投稿本文）が見つかりません。列名をご確認の上、再度アップロードしてください。")
+    st.error("❌ **エラー:** CSVファイルに必須カラム `text`（投稿本文）が見つかりません。")
     st.stop()
 
 if 'eng' not in df_raw.columns: df_raw['eng'] = 0
 if 'platform' not in df_raw.columns: df_raw['platform'] = 'X'
-
 df_raw = df_raw[df_raw['platform'].isin(target_platforms)]
-
-if df_raw.empty:
-    st.warning("⚠️ 選択されたプラットフォームのデータが存在しません。サイドバーの分析設定を見直してください。")
-    st.stop()
 
 with st.spinner("AIがトレンド構造を分析し、投稿企画案を生成しています..."):
     df = run_pipeline(df_raw)
 
 if df.empty:
-    st.warning("⚠️ 有効なトレンドキーワードが抽出できませんでした。データ量を増やすか、テキスト内容をご確認ください。")
+    st.warning("⚠️ 有効なトレンドキーワードが抽出できませんでした。データ量を増やすか設定を見直してください。")
     st.stop()
 
+# ==========================================
+# 6. 結果の事後処理 (ランキング・理由の付与)
+# ==========================================
 df_display = df if show_noise else df[~df['is_noise']].copy()
 
-st.success("✅ 分析が完了しました！以下の企画案とトレンドマップをご確認ください。")
+# 提案可能な企画をポテンシャル順にソート
+ideas_df = df_display[df_display['text_content_type'] != "見送り"].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 
-st.subheader("💡 抽出された投稿企画案 TOP3")
-st.markdown("スコアと関連語の構造から、今作るべきコンテンツの切り口を提案します。")
-ideas_df = df_display[df_display['text_content_type'] != "見送り"].sort_values(by='score_eos', ascending=False).head(3)
+# TOP3に番号を付与
+top3_indices = ideas_df.head(3).index
+df_display['Rank_Num'] = ""
+df_display['plot_label'] = df_display['token'] # マップ表示用ラベル
 
-if not ideas_df.empty:
-    cols = st.columns(len(ideas_df))
-    for i, (_, row) in enumerate(ideas_df.iterrows()):
+if len(top3_indices) > 0:
+    df_display.loc[top3_indices[0], 'Rank_Num'] = "①"
+    df_display.loc[top3_indices[0], 'plot_label'] = "① " + df_display.loc[top3_indices[0], 'token']
+if len(top3_indices) > 1:
+    df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
+    df_display.loc[top3_indices[1], 'plot_label'] = "② " + df_display.loc[top3_indices[1], 'token']
+if len(top3_indices) > 2:
+    df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
+    df_display.loc[top3_indices[2], 'plot_label'] = "③ " + df_display.loc[top3_indices[2], 'token']
+
+# 推奨理由とアクションを自動生成
+def enrich_card_data(row):
+    if row['text_content_type'] == "先読み型":
+        return "成長率が高く、まだ競合が少ないため", "情報感度高め層", "今すぐ仕込み投稿（ブルーオーシャン）"
+    elif row['text_content_type'] == "解説型":
+        return "話題性が急上昇しており、検索需要が高いため", "初心者・入門層", "図解・解説投稿を作成"
+    elif row['text_content_type'] == "比較型":
+        return "関連語との結びつきが強く、違いへの関心が高いため", "検討・比較層", "競合との違いを提示する"
+    elif row['text_content_type'] == "まとめ型":
+        return "圧倒的な話題量を持ち、反応が多いため", "一般大衆層", "反応や事例のまとめを作成"
+    elif row['text_content_type'] == "注目型":
+        return "局地的に強い反応が発生しているため", "ニッチ層", "関連動向の監視・速報"
+    return "話題力・ポテンシャル共に低迷", "-", "見送り"
+
+df_display[['reason', 'target', 'action']] = df_display.apply(lambda r: pd.Series(enrich_card_data(r)), axis=1)
+
+# 行動一覧表用の優先度判定
+def set_priority(row):
+    if row['Rank_Num'] != "": return "🔥 S (最優先)"
+    if row['score_eos'] >= 50: return "👀 A (監視・次点)"
+    if row['score_css'] >= 50: return "📝 B (後追い)"
+    return "➖ C (見送り)"
+
+df_display['priority'] = df_display.apply(set_priority, axis=1)
+
+# ==========================================
+# 7. UI 描画 (結果画面)
+# ==========================================
+# 通知は控えめに
+st.markdown("<div style='color: #2e7d32; font-weight: bold; margin-bottom: 20px;'>✅ 分析完了：今作るべき投稿企画とトレンドマップが生成されました。</div>", unsafe_allow_html=True)
+
+# --- A. 企画案 TOP3 ---
+st.subheader("🔥 今作るべき投稿企画 TOP3")
+
+top3_ideas = df_display[df_display['Rank_Num'] != ""].sort_values(by='Rank_Num')
+
+if not top3_ideas.empty:
+    cols = st.columns(3)
+    for i, (_, row) in enumerate(top3_ideas.iterrows()):
         with cols[i]:
-            st.info(f"**{row['text_content_type']}**\n\n{row['text_title_seed']}")
-            st.caption(f"話題力 (今): {row['score_css']} / ポテンシャル (次): {row['score_eos']}")
+            # カードの高さを揃え、視覚的階層を明確にする
+            bg_color = "#fff8e1" if row['Rank_Num'] == "①" else "#ffffff"
+            border_color = "#ffc107" if row['Rank_Num'] == "①" else "#e0e0e0"
+            rank_badge = "👑 最優先" if row['Rank_Num'] == "①" else f"{row['Rank_Num']}位"
+            
+            st.markdown(f"""
+            <div style="border: 2px solid {border_color}; border-radius: 8px; padding: 16px; background-color: {bg_color}; height: 260px;">
+                <span style="background-color: #333; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; margin-right: 8px;">{row['text_content_type']}</span>
+                <span style="font-weight: bold; color: #d32f2f;">{rank_badge}</span>
+                <h4 style="margin-top: 12px; margin-bottom: 12px; font-size: 1.1em; line-height: 1.4;">{row['text_title_seed']}</h4>
+                <div style="font-size: 0.85em; color: #444; line-height: 1.6;">
+                    <b>理由：</b>{row['reason']}<br>
+                    <b>対象：</b>{row['target']}<br>
+                    <b>推奨アクション：</b><span style="color: #1976d2; font-weight: bold;">{row['action']}</span>
+                </div>
+                <div style="margin-top: 12px; font-size: 0.8em; color: #888;">
+                    話題力: {row['score_css']} / ポテンシャル: {row['score_eos']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 else:
     st.write("現在、強い推奨案はありません。")
 
+# 投稿型の解説アコーディオン
+with st.expander("💡 各「投稿型」の意味と狙い"):
+    st.markdown("""
+    * **先読み型:** まだ競争が浅く、これから伸びるテーマ。いち早く発信することで第一人者ポジションを狙えます。
+    * **解説型:** 今話題になり始めているテーマ。検索需要に応える図解や基本解説が刺さります。
+    * **比較型:** 関連語との結びつきが強いテーマ。「AとBの違い」「どっちを選ぶべきか」のコンテンツが有効です。
+    * **まとめ型:** すでに巨大なバズになっているテーマ。事例やみんなの反応をまとめた保存用のコンテンツが適しています。
+    """)
+
 st.divider()
 
+# --- B. トレンドマップ ---
 st.subheader("📊 トレンド四象限マップ")
-st.markdown("※左上の **「ポテンシャルが高く、話題力がまだ低いゾーン（ブルーオーシャン）」** が仕込みの狙い目です。")
+
+col_map_desc, _ = st.columns([2, 1])
+with col_map_desc:
+    st.info("""
+    **【マップの読み方】**
+    * **左上 (先回り):** まだ競争が浅く、先回りしやすい仕込み候補（★狙い目）
+    * **右上 (本命):** すでに注目度も高く、有力な本命テーマ
+    * **右下 (後追い):** 話題にはなっているが、先行優位は薄い
+    * **左下 (見送り):** 現時点では優先度低め
+    """)
+
 fig = px.scatter(
-    df_display, x="score_css", y="score_eos", text="token", size="freq_raw", color="text_content_type",
+    df_display, x="score_css", y="score_eos", text="plot_label", size="freq_raw", color="text_content_type",
     hover_data=["freq_raw", "score_css", "score_eos"],
-    labels={"score_css": "話題力 (Current Strength)", "score_eos": "ポテンシャル (Emerging Opportunity)", "text_content_type": "推奨投稿型"},
-    height=550
+    labels={"score_css": "話題力 (Current Strength)", "score_eos": "ポテンシャル (Emerging Opportunity)", "text_content_type": "推奨投稿型", "plot_label": "キーワード"},
+    height=600
 )
-fig.update_traces(textposition='top center')
+fig.update_traces(textposition='top center', textfont_size=14) # 注釈文字を少し大きく
 fig.add_hline(y=50, line_dash="dot", line_color="gray")
 fig.add_vline(x=50, line_dash="dot", line_color="gray")
 fig.update_layout(xaxis_range=[0, 105], yaxis_range=[0, 105], margin=dict(t=20, b=20, l=20, r=20))
@@ -220,16 +293,21 @@ st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
-st.subheader("📋 分析キーワード一覧")
+# --- C. アクション一覧表 ---
+st.subheader("📋 行動計画・キーワード一覧")
+st.markdown("抽出された全キーワードの優先度と推奨アクションのリストです。")
+
 view_cols = {
+    'priority': '優先度',
     'token': 'キーワード', 
-    'text_content_type': '推奨投稿型', 
+    'text_content_type': '推奨投稿型',
+    'action': '推奨アクション',
+    'reason': '判定理由',
     'score_css': '話題力(CSS)', 
     'score_eos': 'ポテンシャル(EOS)', 
-    'freq_raw': '出現回数', 
-    'growth_raw': '成長率'
 }
+
 st.dataframe(
-    df_display[list(view_cols.keys())].rename(columns=view_cols).sort_values(by='ポテンシャル(EOS)', ascending=False),
+    df_display[list(view_cols.keys())].rename(columns=view_cols).sort_values(by=['優先度', 'ポテンシャル(EOS)'], ascending=[True, False]),
     use_container_width=True, hide_index=True
 )
