@@ -39,14 +39,21 @@ def fetch_raw_posts() -> pd.DataFrame:
     return pd.DataFrame(posts)
 
 def get_historical_metrics(tokens: list) -> dict:
+    """本来はDBから取得する過去データ（ダミー設定を修正）"""
     hist = {}
     for t in tokens:
-        if t in ['覇権アニメ', '仕事', 'アマギフ']: 
-            hist[t] = {'freq_past': 500, 'freq_14d': 5000, 'days_7d': 7, 'days_30d': 30}
+        if 'NanoBanana' in t or '画像生成AI' in t:
+            # 本当の次に来るワード（過去の出現0回の完全新規トレンド）
+            hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
         elif t in ['Python', 'JavaScript']:
+            # 安定した技術ワード
             hist[t] = {'freq_past': 20, 'freq_14d': 200, 'days_7d': 5, 'days_30d': 15}
         else:
-            hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
+            # ★修正ポイント★
+            # 覇権アニメ関連（伏線、考察、最新話）や日常語（帰宅）など、
+            # 上記以外はすべて「昔からよく使われている常連語」として扱う。
+            # これにより、無駄に新規性(novelty)と成長率(growth)が高騰するのを防ぐ。
+            hist[t] = {'freq_past': 500, 'freq_14d': 5000, 'days_7d': 7, 'days_30d': 30}
     return hist
 
 # ==========================================
