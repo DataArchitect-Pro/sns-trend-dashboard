@@ -21,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意 (省略せずに記載)
+# 2. サンプルデータの用意
 # ==========================================
 SAMPLE_CSV = """text,posted_at,platform,eng,id
 次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
@@ -247,8 +247,6 @@ if df.empty:
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
-# 💡 【重要】Low Impact Filter (平均エンゲージメントによる一般語・ノイズの足切り)
-# 平均Engが5未満の単語は、どれだけ新規性や継続性があってもトレンドとはみなさず、強制的に影響力不足とする
 df_display['is_low_impact'] = df_display['engagement_raw'] < 5.0
 
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
@@ -256,7 +254,6 @@ is_emerging = (df_display['novelty_z'] >= 0.5)
 is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
 
-# 💡 Sランク条件に (~is_low_impact) を追加し、一般語の誤昇格を完全にブロック
 s_condition = (~is_spike) & (~df_display['is_low_impact']) & is_high_score & (has_network | is_emerging)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
@@ -268,14 +265,12 @@ if len(top3_indices) > 1: df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
 if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 
 def set_priority(row):
-    # 💡 影響力が極端に低いワード(日記など)は、スコアが高くても強制的にC(見送り)に落とす
     if row['is_low_impact']:
         return "➖ C (見送り)"
         
     if row['Rank_Num'] != "": 
         return "🔥 S (最優先)"
     
-    # Aランクの条件
     if row['score_css'] >= 45 or row['score_eos'] >= 45 or row['engagement_z'] >= 0.7 or row['freq_z'] >= 0.7: 
         return "👀 A (保留)"
         
@@ -323,7 +318,6 @@ def enrich_card_data(row):
             return "監視継続", "注目候補ではあるが、観測期間や投稿数が少なくSランク昇格には届いていない"
             
     else: 
-        # 💡 低影響力（ノイズ語）に対する専用の理由文
         if is_low_impact_flag:
             return "今回は見送り", "平均的な反応が著しく低く、トレンドとしての影響力が不足しているため見送り"
         elif is_spike_flag:
