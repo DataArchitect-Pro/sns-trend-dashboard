@@ -21,25 +21,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意 (省略)
+# 2. 完璧な混合ケース検証用データ
 # ==========================================
+# 💡 すべての単語が「最低3回出現する」ように調整済みのテスト用CSV
 SAMPLE_CSV = """text,posted_at,platform,eng,id
-次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
-NanoBananaの始め方を初心者向けに解説します。,2023-10-01 10:15:00,YouTube,80,A02
-画像生成AIのNanoBanana、プロンプトのコツと始め方。,2023-10-01 10:30:00,X,60,A03
-画像生成AIのNanoBananaとは？他のAIとの違いを比較してみた。,2023-10-01 11:00:00,YouTube,120,A04
-PythonとJavaScriptの違いを徹底比較！どっちを学ぶべき？,2023-10-01 11:30:00,YouTube,300,B01
-初心者におすすめなのはPython？JavaScript？違いを解説。,2023-10-01 12:00:00,X,150,B02
-Web開発ならJavaScript、AIならPython。それぞれのメリットを比較。,2023-10-01 12:30:00,X,180,B03
-Pythonの学習ロードマップまとめ。初心者必見！,2023-10-01 13:00:00,YouTube,400,B04
-今期の覇権アニメ、神作画すぎた。みんなの反応まとめ。,2023-10-01 13:30:00,X,1500,C01
-覇権アニメ第8話の伏線考察まとめ！,2023-10-01 14:00:00,YouTube,2500,C02
-覇権アニメの最新話、海外の反応まとめ動画です。,2023-10-01 14:30:00,YouTube,3000,C03
-覇権アニメ、なぜここまで人気なのか？海外の反応と理由を解説。,2023-10-01 15:00:00,X,1200,C04
-アマギフプレゼント！フォローとRTをお願いします！,2023-10-01 15:30:00,X,0,E01
-抽選で最新ゲーム機プレゼント！RTとフォロー必須！,2023-10-01 16:00:00,X,0,E02
-今日の仕事疲れたー。早く帰宅したい。,2023-10-01 16:30:00,X,5,F01
-仕事終わらない。明日も仕事だ。,2023-10-01 17:00:00,X,2,F02
+次世代デバイスNanoBanana、ついに発表！,2023-10-01 10:00:00,X,40,M01
+NanoBananaの実機レビュー。他のVRと比較,2023-10-01 11:30:00,YouTube,80,M02
+NanoBananaの使い方がわからない人向け解説,2023-10-01 13:00:00,X,60,M03
+ChatGPTで業務効率化できた,2023-10-01 10:15:00,X,800,M04
+今の時代、ChatGPTは必須ツールだね,2023-10-01 11:45:00,X,1200,M05
+ChatGPTを使った自動化の解説動画です,2023-10-01 14:00:00,YouTube,2500,M06
+生配信の放送事故やばすぎだろｗｗ,2023-10-01 20:00:00,X,3000,M07
+あの放送事故、伝説になるわ,2023-10-01 20:05:00,X,4000,M08
+放送事故の切り抜き動画です,2023-10-01 20:10:00,YouTube,5000,M09
+今日のランチ美味しかった,2023-10-01 10:30:00,X,2,M10
+駅前でランチしてる,2023-10-01 12:00:00,X,1,M11
+ランチのおすすめ教えて,2023-10-01 14:30:00,X,0,M12
+スマホ買い替えたい,2023-10-01 09:00:00,X,5,M13
+新しいスマホ探してる,2023-10-01 09:15:00,X,3,M14
 """
 
 # ==========================================
@@ -53,11 +52,11 @@ with st.sidebar:
     st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
     
     st.download_button(
-        label="📥 サンプルCSVをダウンロード",
+        label="📥 混合ケース用CSVをダウンロード",
         data=SAMPLE_CSV,
-        file_name="sample_sns_data.csv",
+        file_name="test_pattern_05_mixed.csv",
         mime="text/csv",
-        help="フォーマットの確認や、お試し分析にご利用ください。"
+        help="S・A・Cがすべて出現するように設計されたテストデータです"
     )
 
     st.divider()
@@ -248,13 +247,13 @@ df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_no
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
 df_display['is_low_impact'] = df_display['engagement_raw'] < 5.0
+
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
 is_continuous = df_display.get('sustainability_z', 0) >= 0.7
 
-# 💡 Sランクへの絶対的な昇格ブロック: 飽和語(~is_saturated)を厳格に弾く
 s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~df_display.get('is_saturated', False)) & is_high_score & (has_network | is_emerging | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
@@ -279,13 +278,11 @@ def set_priority(row):
 
 df_display['priority'] = df_display.apply(set_priority, axis=1)
 
-# 💡 飽和語は解説・比較・まとめのいずれかに固定されているため、「保留」として上書きしない
 df_display['text_content_type'] = df_display.apply(
     lambda r: "保留" if r['priority'] == "👀 A (保留)" and not r.get('is_saturated', False) else r['text_content_type'], 
     axis=1
 )
 
-# 💡 一覧表にペナルティ可視化カラムを追加
 df_display['saturated_penalty'] = df_display.get('is_saturated', False).apply(lambda x: "作動(S昇格不可)" if x else "なし")
 
 def enrich_card_data(row):
@@ -321,9 +318,8 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        # 💡 飽和語に対する専用の理由分岐（最優先）
         if is_saturated_flag:
-            return "後追い注意", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
+            return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
         elif is_spike_flag:
             return "継続確認待ち", "短期間の局地的な反応（スパイク）のため、トレンドが継続するか様子見"
         elif is_continuous_flag:
@@ -391,10 +387,10 @@ st.markdown(f"""
 if count_s == 0:
     if count_a > 0:
         a_reasons = df_display[df_display['priority'] == "👀 A (保留)"]['reason'].tolist()
-        if any("スパイク" in r for r in a_reasons):
-            msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続するか不透明なため、今回は「保留」と判定しました。"
-        elif any("後追いリスク" in r for r in a_reasons):
+        if any("後追いリスク" in r for r in a_reasons):
             msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
+        elif any("スパイク" in r for r in a_reasons):
+            msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続するか不透明なため、今回は「保留」と判定しました。"
         elif any("継続上昇" in r for r in a_reasons):
             msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
         else:
@@ -476,6 +472,18 @@ st.dataframe(
     df_display[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
 )
+
+# 💡 除外された単語（ブラックボックス）をUIに表示する機能
+with st.expander("🔍 抽出プロセスの詳細ログ（足切り・除外された単語）", expanded=False):
+    st.markdown(f"**▼ 最低出現回数（{min_freq}回）未満で足切りされた単語**")
+    dropped = metadata.get('dropped_tokens', [])
+    if dropped:
+        st.write(", ".join(dropped))
+    else:
+        st.write("なし")
+        
+    st.markdown("**▼ ストップワード（事前除外）として無視された一般語**")
+    st.write("「こと」「今日」「おすすめ」「便利」「普通」「日記」「やばい」などの意味が薄い一般語は、ノイズを防ぐため自然言語処理の段階で強制的に抽出対象外となります。")
 
 with st.expander("💡 投稿型の意味と使い分け", expanded=False):
     st.markdown("""
