@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import networkx as nx
 import math
+import re  # 正規表現モジュールを追加
 from collections import defaultdict
 from itertools import combinations
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
@@ -12,102 +13,109 @@ from janome.tokenizer import Tokenizer
 # ==========================================
 tokenizer = Tokenizer()
 
-# 実務ではこれを外部の辞書ファイル（CSV等）で管理します
-STOP_WORDS = {'こと', 'もの', 'これ', 'それ', '今日', 'さん', 'ちゃん', 'ため', 'よう', 'ところ', 'マジ', 'の', 'ん'}
+# 【修正】ノイズになりやすいSNS特有の語を大幅追加
+STOP_WORDS = {
+    'こと', 'もの', 'これ', 'それ', '今日', 'さん', 'ちゃん', 'ため', 'よう', 'ところ', 
+    'マジ', 'の', 'ん', 'お願い', '動画', '最新', '話', 'みんな', '反応', '一覧', '最高'
+}
 MAGIC_WORDS = {'とは', '違い', 'おすすめ', '比較', '理由', 'メリット', 'デメリット', 'やり方', '始め方', '初心者', '解説', 'まとめ'}
 
 # ==========================================
-# 1. データ取得（本番を模した生テキスト生成）
+# 1. データ取得（変更なし）
 # ==========================================
 def fetch_raw_posts() -> pd.DataFrame:
-    """本番のAPI取得を模した、生の投稿テキストデータ"""
     posts = []
-    
-    # パターン1: 次に来るトレンド（ブルーオーシャン / 比較・解説）
     for i in range(50):
         posts.append({"id": f"A{i}", "platform": "X", "text": "新しい画像生成AIの NanoBanana とは？ 始め方 を解説。", "eng": 25})
     for i in range(30):
         posts.append({"id": f"B{i}", "platform": "YouTube", "text": "Python と JavaScript の 違い を 比較 。初心者 に おすすめ です。", "eng": 40})
-        
-    # パターン2: 覇権エンタメ（レッドオーシャン）
     for i in range(500):
         posts.append({"id": f"C{i}", "platform": "X", "text": "覇権アニメ の最新話、 最高 だった。伏線の 理由 を 考察 してみた。", "eng": 150})
         posts.append({"id": f"D{i}", "platform": "YouTube", "text": "覇権アニメ の まとめ 動画です。", "eng": 300})
-        
-    # パターン3: スパム群（外れ値）
     for i in range(2000):
         posts.append({"id": f"E{i}", "platform": "X", "text": "アマギフ プレゼント！ フォロー と RT をお願いします！", "eng": 0})
-        
-    # パターン4: 日常語（ノイズ）
     for i in range(300):
         posts.append({"id": f"F{i}", "platform": "X", "text": "今日 の 仕事 疲れた。 帰宅 します。", "eng": 2})
-
     return pd.DataFrame(posts)
 
 def get_historical_metrics(tokens: list) -> dict:
-    """本来はDBから取得する過去データ（今回はモック関数）"""
     hist = {}
     for t in tokens:
         if t in ['覇権アニメ', '仕事', 'アマギフ']: 
             hist[t] = {'freq_past': 500, 'freq_14d': 5000, 'days_7d': 7, 'days_30d': 30}
         elif t in ['Python', 'JavaScript']:
             hist[t] = {'freq_past': 20, 'freq_14d': 200, 'days_7d': 5, 'days_30d': 15}
-        else: # NanoBanana等の完全新規ワード
+        else:
             hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
     return hist
 
 # ==========================================
-# 2. NLPパイプライン（形態素解析）
+# 2. NLPパイプライン（形態素解析の強化）
 # ==========================================
 def extract_tokens(text: str) -> list:
-    """テキストから意味のある名詞（トークン）を抽出する"""
+    """名詞が連続した場合、1つの「複合名詞」として結合して抽出する"""
     tokens = []
+    current_compound = ""
+    
     for token in tokenizer.tokenize(text):
         if token.part_of_speech.startswith('名詞'):
-            word = token.surface
-            if len(word) > 1 and word not in STOP_WORDS:
-                tokens.append(word)
-    # 同一投稿内の重複を排除して返す
+            current_compound += token.surface # 名詞が続く限り文字を繋げる
+        else:
+            if current_compound:
+                if len(current_compound) > 1 and current_compound not in STOP_WORDS:
+                    tokens.append(current_compound)
+                current_compound = ""
+                
+    if current_compound: # 最後の単語の処理
+        if len(current_compound) > 1 and current_compound not in STOP_WORDS:
+            tokens.append(current_compound)
+            
     return list(set(tokens))
 
 # ==========================================
-# 3. ネットワーク分析パイプライン
+# 3. ネットワーク分析パイプライン（スパムフィルタ追加）
 # ==========================================
 def compute_network_and_features(df_raw: pd.DataFrame) -> pd.DataFrame:
-    """生データからグラフを構築し、全特徴量を計算する"""
     total_posts = len(df_raw)
-    
-    # 1. トークン化と基礎集計
     word_counts = defaultdict(int)
     pair_counts = defaultdict(int)
     word_eng = defaultdict(int)
     word_platforms = defaultdict(lambda: {'X': 0, 'YouTube': 0})
     
+    # 【追加】スパム検知用の正規表現
+    spam_pattern = re.compile(r'アマギフ|プレゼント|フォロー|RT|抽選')
+    valid_posts_count = 0
+    
     for _, row in df_raw.iterrows():
-        tokens = extract_tokens(row['text'])
+        text = row['text']
+        
+        # --- スパムフィルター ---
+        if spam_pattern.search(text):
+            continue # スパムと判定されたら集計せずにスキップ
+            
+        valid_posts_count += 1
+        tokens = extract_tokens(text)
         for w in tokens:
             word_counts[w] += 1
             word_eng[w] += row['eng']
             word_platforms[w][row['platform']] += 1
-        # 共起ペアのカウント
+            
         for w1, w2 in combinations(sorted(tokens), 2):
             pair_counts[(w1, w2)] += 1
 
-    # 2. 共起グラフの構築と NPMI の計算
+    # (以下、グラフ構築処理は変更なし。ただし total_posts は valid_posts_count に変更)
     G = nx.Graph()
     for (w1, w2), count in pair_counts.items():
-        if count >= 3: # ノイズ排除: 3回以上共起したペアのみエッジを張る
-            p_x = word_counts[w1] / total_posts
-            p_y = word_counts[w2] / total_posts
-            p_xy = count / total_posts
+        if count >= 3:
+            p_x = word_counts[w1] / valid_posts_count
+            p_y = word_counts[w2] / valid_posts_count
+            p_xy = count / valid_posts_count
             
             pmi = math.log10(p_xy / (p_x * p_y))
             npmi = pmi / -math.log10(p_xy)
-            
-            if npmi > 0.1: # 有意な共起のみグラフに追加
+            if npmi > 0.1:
                 G.add_edge(w1, w2, weight=npmi, distance=1.0/npmi)
 
-    # 3. 中心性の計算 (NetworkX)
     k_val = min(50, len(G.nodes))
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     
@@ -115,27 +123,22 @@ def compute_network_and_features(df_raw: pd.DataFrame) -> pd.DataFrame:
     for node in G.nodes:
         degree_centrality[node] = sum(data['weight'] for _, _, data in G.edges(node, data=True))
 
-    # 4. 履歴データの取得
     unique_tokens = list(word_counts.keys())
     hist_db = get_historical_metrics(unique_tokens)
 
-    # 5. 特徴量DataFrameの構築
     features = []
     for w in unique_tokens:
-        if word_counts[w] < 5: continue # 頻度5未満の足切り
+        if word_counts[w] < 5: continue
         
-        # 媒体横断性
         fx = word_platforms[w]['X']
         fyt = word_platforms[w]['YouTube']
         cross_platform_raw = (2 * min(fx, fyt)) / (fx + fyt + 1)
         
-        # マジックワードとの最大NPMI (Conversion)
         max_conversion = 0.0
         for mw in MAGIC_WORDS:
             if G.has_edge(w, mw):
                 max_conversion = max(max_conversion, G[w][mw]['weight'])
                 
-        # 履歴メトリクス
         hist = hist_db.get(w, {})
         freq_past = hist.get('freq_past', 0)
         freq_14d = hist.get('freq_14d', 0)
@@ -145,7 +148,7 @@ def compute_network_and_features(df_raw: pd.DataFrame) -> pd.DataFrame:
             'freq_raw': word_counts[w],
             'growth_raw': (word_counts[w] + 5) / (freq_past + 5),
             'centrality_raw': degree_centrality.get(w, 0.0),
-            'engagement_raw': word_eng[w] / word_counts[w], # 1投稿あたりの平均熱量
+            'engagement_raw': word_eng[w] / word_counts[w],
             'bridge_raw': betweenness.get(w, 0.0),
             'cross_platform_raw': cross_platform_raw,
             'sustainability_raw': hist.get('days_7d', 1) / 7.0,
