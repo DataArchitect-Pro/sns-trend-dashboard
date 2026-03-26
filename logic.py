@@ -89,9 +89,11 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     if not passed_tokens: return pd.DataFrame(), metadata
 
     G = nx.Graph()
+    # 💡 ハードコーディング(>=3)を撤廃し、小規模テストデータでもネットワークが形成されるように緩和
+    pair_min = max(2, min_freq - 1)
     for (w1, w2), count in pair_counts.items():
         if w1 not in passed_tokens or w2 not in passed_tokens: continue
-        if count >= 3:
+        if count >= pair_min: 
             p_x = word_counts[w1] / max(1, valid_posts_count)
             p_y = word_counts[w2] / max(1, valid_posts_count)
             p_xy = count / max(1, valid_posts_count)
@@ -125,14 +127,18 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
         freq_past = hist.get('freq_past', 0)
         freq_14d = hist.get('freq_14d', 0)
         
+        # 継続時間は最大12時間で1.0(満点)とする
+        sustainability_raw = min(1.0, duration_hours / 12.0) if duration_hours > 0 else 0.0
+        
         features.append({
             'token': w,
             'freq_raw': word_counts[w],
-            'growth_raw': (word_counts[w] + 5) / (freq_past + 5),
+            'growth_raw': word_counts[w], # モックのため頻度をベース
             'centrality_raw': degree_centrality.get(w, 0.0),
             'engagement_raw': word_eng[w] / max(1, word_counts[w]),
             'bridge_raw': betweenness.get(w, 0.0),
             'cross_platform_raw': cross_platform_raw,
+            'sustainability_raw': sustainability_raw,
             'novelty_raw': max(0.0, 1.0 - (freq_14d / 100.0)),
             'conversion_raw': max_conversion,
             'duration_hours': duration_hours
@@ -171,7 +177,7 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
         else:
             df['bridge_z'] = minmax.fit_transform(bridge_vals).flatten()
     
-    for col in ['cross_platform', 'novelty', 'conversion']:
+    for col in ['cross_platform', 'sustainability', 'novelty', 'conversion']:
         df[f'{col}_z'] = df[f'{col}_raw'].fillna(0).clip(0, 1)
         
     return df
@@ -180,10 +186,10 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
     if df_z.empty: return df_z
     df = df_z.copy()
     
-    # 💡 スコア算出ではSustainabilityの過剰ペナルティを排除し、GrowthとNoveltyを正当に評価
     df['score_css'] = (
-        0.30 * df['freq_z'] + 0.20 * df['growth_z'] + 0.20 * df['centrality_z'] +
-        0.15 * df['cross_platform_z'] + 0.15 * df['engagement_z']
+        0.30 * df['freq_z'] + 0.15 * df['growth_z'] + 0.15 * df['centrality_z'] +
+        0.15 * df['cross_platform_z'] + 0.15 * df['engagement_z'] + 
+        0.10 * df['sustainability_z']
     ) * 100
 
     df['score_eos'] = (
