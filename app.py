@@ -192,70 +192,94 @@ if len(top3_indices) > 2:
     df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
     df_display.loc[top3_indices[2], 'plot_label'] = "③ " + df_display.loc[top3_indices[2], 'token']
 
-# 推奨理由とアクションを自動生成
+# 推奨アクションと型の分離、理由の明文化
 def enrich_card_data(row):
     if row['text_content_type'] == "先読み型":
-        return "成長率が高く、まだ競合が少ないため", "情報感度高め層", "今すぐ仕込み投稿（ブルーオーシャン）"
+        return "今すぐ仕込み投稿", "成長率が高く、まだ競合が少ないため"
     elif row['text_content_type'] == "解説型":
-        return "話題性が急上昇しており、検索需要が高いため", "初心者・入門層", "図解・解説投稿を作成"
+        return "今すぐ投稿", "話題性が急上昇しており、検索需要が高いため"
     elif row['text_content_type'] == "比較型":
-        return "関連語との結びつきが強く、違いへの関心が高いため", "検討・比較層", "競合との違いを提示する"
+        return "今すぐ投稿", "関連語との結びつきが強く、違いへの関心が高いため"
     elif row['text_content_type'] == "まとめ型":
-        return "圧倒的な話題量を持ち、反応が多いため", "一般大衆層", "反応や事例のまとめを作成"
+        return "今すぐ投稿", "圧倒的な話題量を持ち、反応が多いため"
     elif row['text_content_type'] == "注目型":
-        return "局地的に強い反応が発生しているため", "ニッチ層", "関連動向の監視・速報"
-    return "話題力・ポテンシャル共に低迷", "-", "見送り"
+        return "監視継続", "局地的に強い反応が発生しているため"
+    return "今回は見送り", "話題力・ポテンシャル共に低迷"
 
-df_display[['reason', 'target', 'action']] = df_display.apply(lambda r: pd.Series(enrich_card_data(r)), axis=1)
+df_display[['action', 'reason']] = df_display.apply(lambda r: pd.Series(enrich_card_data(r)), axis=1)
 
-# 行動一覧表用の優先度判定
+# 行動一覧表用の優先度判定 (S / A / C)
 def set_priority(row):
     if row['Rank_Num'] != "": return "🔥 S (最優先)"
-    if row['score_eos'] >= 50: return "👀 A (監視・次点)"
-    if row['score_css'] >= 50: return "📝 B (後追い)"
+    if row['score_eos'] >= 50 or row['score_css'] >= 50: return "👀 A (監視・次点)"
     return "➖ C (見送り)"
 
 df_display['priority'] = df_display.apply(set_priority, axis=1)
 
+# 並び順を徹底するためのカテゴリ化とソート
+priority_order = ["🔥 S (最優先)", "👀 A (監視・次点)", "➖ C (見送り)"]
+df_display['priority'] = pd.Categorical(df_display['priority'], categories=priority_order, ordered=True)
+df_display = df_display.sort_values(by=['priority', 'action', 'score_eos', 'score_css'], ascending=[True, True, False, False])
+
 # ==========================================
 # 7. UI 描画 (結果画面)
 # ==========================================
-# 通知は控えめに
-st.markdown("<div style='color: #2e7d32; font-weight: bold; margin-bottom: 20px;'>✅ 分析完了：今作るべき投稿企画とトレンドマップが生成されました。</div>", unsafe_allow_html=True)
+# 通知は薄く1行のみ
+st.markdown("<div style='color: #2e7d32; font-size: 0.9em; margin-bottom: 24px;'>✅ 分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
 
-# --- A. 企画案 TOP3 ---
-st.subheader("🔥 今作るべき投稿企画 TOP3")
-
+# --- A. 企画案 コンパクト要約 ---
+st.subheader("🔥 最優先テーマ 3件")
 top3_ideas = df_display[df_display['Rank_Num'] != ""].sort_values(by='Rank_Num')
 
 if not top3_ideas.empty:
-    cols = st.columns(3)
-    for i, (_, row) in enumerate(top3_ideas.iterrows()):
-        with cols[i]:
-            # カードの高さを揃え、視覚的階層を明確にする
-            bg_color = "#fff8e1" if row['Rank_Num'] == "①" else "#ffffff"
-            border_color = "#ffc107" if row['Rank_Num'] == "①" else "#e0e0e0"
-            rank_badge = "👑 最優先" if row['Rank_Num'] == "①" else f"{row['Rank_Num']}位"
-            
-            st.markdown(f"""
-            <div style="border: 2px solid {border_color}; border-radius: 8px; padding: 16px; background-color: {bg_color}; height: 260px;">
-                <span style="background-color: #333; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; margin-right: 8px;">{row['text_content_type']}</span>
-                <span style="font-weight: bold; color: #d32f2f;">{rank_badge}</span>
-                <h4 style="margin-top: 12px; margin-bottom: 12px; font-size: 1.1em; line-height: 1.4;">{row['text_title_seed']}</h4>
-                <div style="font-size: 0.85em; color: #444; line-height: 1.6;">
-                    <b>理由：</b>{row['reason']}<br>
-                    <b>対象：</b>{row['target']}<br>
-                    <b>推奨アクション：</b><span style="color: #1976d2; font-weight: bold;">{row['action']}</span>
-                </div>
-                <div style="margin-top: 12px; font-size: 0.8em; color: #888;">
-                    話題力: {row['score_css']} / ポテンシャル: {row['score_eos']}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    for _, row in top3_ideas.iterrows():
+        # 結論ファーストの1行リスト
+        st.markdown(f"**{row['Rank_Num']} {row['token']}** — {row['action']}（{row['text_content_type']}）")
 else:
     st.write("現在、強い推奨案はありません。")
 
-# 投稿型の解説アコーディオン
+st.write("") # 余白
+
+# --- B. トレンドマップ ---
+st.subheader("📊 トレンド四象限マップ")
+# 青い大ボックスを廃止し、1行だけのスッキリとした説明へ
+st.caption("左上=先回り候補 / 右上=本命 / 右下=後追い / 左下=見送り")
+
+fig = px.scatter(
+    df_display, x="score_css", y="score_eos", text="plot_label", size="freq_raw", color="text_content_type",
+    hover_data=["text_content_type", "action", "freq_raw"],
+    labels={"score_css": "話題力 (Current Strength)", "score_eos": "ポテンシャル (Emerging Opportunity)", "text_content_type": "推奨投稿型", "plot_label": "キーワード"},
+    height=550
+)
+fig.update_traces(textposition='top center', textfont_size=14)
+fig.add_hline(y=50, line_dash="dot", line_color="gray")
+fig.add_vline(x=50, line_dash="dot", line_color="gray")
+fig.update_layout(xaxis_range=[0, 105], yaxis_range=[0, 105], margin=dict(t=10, b=10, l=10, r=10))
+st.plotly_chart(fig, use_container_width=True)
+
+st.divider()
+
+# --- C. アクション一覧表 ---
+st.subheader("📋 行動計画・キーワード一覧")
+# ルールの明文化
+st.caption("S=今すぐ着手 / A=監視しつつ検討 / C=今回は見送り")
+
+view_cols = {
+    'priority': '優先度',
+    'token': 'キーワード', 
+    'action': '推奨アクション',
+    'text_content_type': '推奨投稿型',
+    'reason': '判定理由',
+    'score_css': '話題力(CSS)', 
+    'score_eos': 'ポテンシャル(EOS)', 
+}
+
+st.dataframe(
+    df_display[list(view_cols.keys())].rename(columns=view_cols),
+    use_container_width=True, hide_index=True
+)
+
+# 常時表示を避け、最下部に折りたたみで配置
 with st.expander("💡 各「投稿型」の意味と狙い"):
     st.markdown("""
     * **先読み型:** まだ競争が浅く、これから伸びるテーマ。いち早く発信することで第一人者ポジションを狙えます。
@@ -263,51 +287,3 @@ with st.expander("💡 各「投稿型」の意味と狙い"):
     * **比較型:** 関連語との結びつきが強いテーマ。「AとBの違い」「どっちを選ぶべきか」のコンテンツが有効です。
     * **まとめ型:** すでに巨大なバズになっているテーマ。事例やみんなの反応をまとめた保存用のコンテンツが適しています。
     """)
-
-st.divider()
-
-# --- B. トレンドマップ ---
-st.subheader("📊 トレンド四象限マップ")
-
-col_map_desc, _ = st.columns([2, 1])
-with col_map_desc:
-    st.info("""
-    **【マップの読み方】**
-    * **左上 (先回り):** まだ競争が浅く、先回りしやすい仕込み候補（★狙い目）
-    * **右上 (本命):** すでに注目度も高く、有力な本命テーマ
-    * **右下 (後追い):** 話題にはなっているが、先行優位は薄い
-    * **左下 (見送り):** 現時点では優先度低め
-    """)
-
-fig = px.scatter(
-    df_display, x="score_css", y="score_eos", text="plot_label", size="freq_raw", color="text_content_type",
-    hover_data=["freq_raw", "score_css", "score_eos"],
-    labels={"score_css": "話題力 (Current Strength)", "score_eos": "ポテンシャル (Emerging Opportunity)", "text_content_type": "推奨投稿型", "plot_label": "キーワード"},
-    height=600
-)
-fig.update_traces(textposition='top center', textfont_size=14) # 注釈文字を少し大きく
-fig.add_hline(y=50, line_dash="dot", line_color="gray")
-fig.add_vline(x=50, line_dash="dot", line_color="gray")
-fig.update_layout(xaxis_range=[0, 105], yaxis_range=[0, 105], margin=dict(t=20, b=20, l=20, r=20))
-st.plotly_chart(fig, use_container_width=True)
-
-st.divider()
-
-# --- C. アクション一覧表 ---
-st.subheader("📋 行動計画・キーワード一覧")
-st.markdown("抽出された全キーワードの優先度と推奨アクションのリストです。")
-
-view_cols = {
-    'priority': '優先度',
-    'token': 'キーワード', 
-    'text_content_type': '推奨投稿型',
-    'action': '推奨アクション',
-    'reason': '判定理由',
-    'score_css': '話題力(CSS)', 
-    'score_eos': 'ポテンシャル(EOS)', 
-}
-
-st.dataframe(
-    df_display[list(view_cols.keys())].rename(columns=view_cols).sort_values(by=['優先度', 'ポテンシャル(EOS)'], ascending=[True, False]),
-    use_container_width=True, hide_index=True
-)
