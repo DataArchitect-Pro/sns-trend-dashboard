@@ -191,21 +191,26 @@ if df.empty:
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
-df_display['is_low_impact'] = df_display['engagement_raw'] < 5.0
+# 💡 変数をPandas Seriesとして厳密に定義し、NameErrorを完全に防ぐ
+is_low_impact = df_display['engagement_raw'] < 5.0
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
-
-df_display['is_abstract'] = df_display['token'].isin(MAGIC_WORDS) | ((df_display['token'].str.len() <= 2) & (~has_network))
-df_display['is_weak_theme'] = (df_display['score_css'] < 35) & (~has_network)
-
+is_abstract = df_display['token'].isin(MAGIC_WORDS) | ((df_display['token'].str.len() <= 2) & (~has_network))
+is_weak_theme = (df_display['score_css'] < 35) & (~has_network)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_continuous = (df_display['sustainability_z'] >= 0.7) & (df_display['growth_z'] >= 0.5)
 
 is_high_score = ((df_display['score_eos'] >= 50) & (df_display['score_css'] >= 35)) | (df_display['score_css'] >= 55)
+is_fully_saturated = df_display['novelty_z'] <= 0.05
+is_saturated = df_display.get('is_saturated', pd.Series(False, index=df_display.index))
 
-# 💡 飽和語はS昇格への道を完全に遮断する (is_continuous等での特例バイパスを許可しない)
-is_saturated = df_display.get('is_saturated', False)
-s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~is_abstract) & (~df_display['is_weak_theme']) & (~is_saturated) & is_high_score & (has_network | is_emerging | is_continuous)
+# 💡 データフレームに格納
+df_display['is_low_impact'] = is_low_impact
+df_display['is_abstract'] = is_abstract
+df_display['is_weak_theme'] = is_weak_theme
+
+# 💡 S条件式 (ビット演算子 '&', '~' を使用し、Series同士で計算)
+s_condition = (~is_spike) & (~is_low_impact) & (~is_fully_saturated) & (~is_abstract) & (~is_weak_theme) & is_high_score & (has_network | is_emerging | is_continuous) & ((~is_saturated) | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 top3_indices = s_candidates.head(3).index
@@ -243,7 +248,7 @@ def override_ctype(r):
 df_display['text_content_type'] = df_display.apply(override_ctype, axis=1)
 
 df_display['spike_penalty'] = is_spike.apply(lambda x: "作動(継続性不足)" if x else "なし")
-df_display['saturated_penalty'] = df_display.get('is_saturated', False).apply(lambda x: "作動(S昇格不可)" if x else "なし")
+df_display['saturated_penalty'] = is_saturated.apply(lambda x: "作動(S昇格不可)" if x else "なし")
 
 def enrich_card_data(row):
     original_ctype = row['text_content_type']
@@ -258,6 +263,7 @@ def enrich_card_data(row):
     
     is_spike_flag = duration < 1.0
     is_saturated_flag = row.get('is_saturated', False)
+    is_fully_saturated_flag = novelty <= 0.05
     is_low_impact_flag = row.get('is_low_impact', False)
     is_continuous_flag = row.get('sustainability_z', 0) >= 0.7 and row.get('growth_z', 0) >= 0.5
     is_abstract_flag = row.get('is_abstract', False)
@@ -272,17 +278,16 @@ def enrich_card_data(row):
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         if action == "今すぐ初心者向け投稿": action = "今すぐ解説投稿"
         
-        if css < 40:
-            reason = "話題力は発展途上だが、ポテンシャルが極めて高く今のうちに先回りすべき本命テーマ"
-        elif novelty >= 0.5:
-            if is_continuous_flag:
-                reason = "新規性が高く数日単位で成長中。競争が浅い今のうちに先回りする価値が極めて高い先読み候補"
-            elif is_cross:
-                reason = "新規性が高く競争が浅い。媒体横断で波及し始めており、早期に先回りする価値が高い本命候補"
+        # 💡 Sランク理由：新語と継続上昇を明確に分離
+        if novelty >= 0.5:
+            if is_cross:
+                reason = "新規性が高く競争が浅い。媒体横断で波及し始めており、今のうちに先回りして仕込む価値が極めて高い先読み候補"
             else:
-                reason = "新規性と成長率が高く、競争がまだ浅いため早期に先回りする価値が高い先読み候補"
+                reason = "新規性と成長率が高く競争が浅いため、今のうちに先回りして仕込む価値が極めて高い先読み候補"
         elif is_continuous_flag:
             reason = "数日単位で安定して伸びており、一時的なスパイクではない確実な継続上昇テーマ"
+        elif css < 40:
+            reason = "話題力は発展途上だが、ポテンシャルが極めて高く今のうちに先回りすべき本命テーマ"
         elif is_cross:
             reason = "複数媒体で注目が広がっており、今すぐ仕込む価値が高い本命テーマ"
         elif is_yt_heavy:
@@ -294,15 +299,12 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        # 💡 [最優先] 飽和語は継続上昇していても「後追い注意」として確実にブロック理由を出す
-        if is_saturated_flag:
+        if is_fully_saturated_flag or is_saturated_flag:
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには優位性が低く後追いリスクが高い"
         elif is_spike_flag:
             return "様子見", "一時的急騰による局地的反応のため、継続性不透明であり一旦様子見"
-        
         elif eos >= 55 and has_net:
             return "準本命候補", "注目候補でありポテンシャルは高いが、最優先で着手するには話題力や継続性があと一歩不足"
-        
         elif is_yt_heavy:
             return "検索需要待ち", "YouTubeでの検索・継続視聴は見込めるが、全体の話題力・波及があと一歩不足"
         elif is_x_heavy:
