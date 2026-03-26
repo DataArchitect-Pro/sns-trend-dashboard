@@ -247,13 +247,14 @@ if df.empty:
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
-# 💡 明確化された S/A/C の境界ルール
+# 💡 広がり(Network)は絶対条件から外し、「広がり」か「新規性(Novelty)」のどちらかがあればS昇格を許容
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
-is_spike = df_display['duration_hours'] < 1.0  # 1時間未満はスパイクと判定
+is_emerging = (df_display['novelty_z'] >= 0.5) 
+is_spike = df_display['duration_hours'] < 1.0  # 1時間未満の局所集中はスパイクとして弾く
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
 
-# Sランク: スコアが高く、広がり(Network)があり、短時間のスパイクではない
-s_condition = has_network & (~is_spike) & is_high_score
+# 💡 Sランクの条件緩和（パターン1救済）
+s_condition = (~is_spike) & is_high_score & (has_network | is_emerging)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 
@@ -264,10 +265,10 @@ if len(top3_indices) > 0: df_display.loc[top3_indices[0], 'Rank_Num'] = "①"
 if len(top3_indices) > 1: df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
 if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 
+# A/Sの境界判定
 def set_priority(row):
     if row['Rank_Num'] != "": 
         return "🔥 S (最優先)"
-    # Sから漏れたもので、高スコア・高Eng・スパイク等の要素があるものはAに救済
     if row['score_css'] >= 45 or row['score_eos'] >= 45 or row['engagement_z'] >= 0.7 or row['freq_z'] >= 0.7: 
         return "👀 A (保留)"
     return "➖ C (見送り)"
@@ -279,6 +280,7 @@ df_display['text_content_type'] = df_display.apply(
     axis=1
 )
 
+# 💡 AとCの理由の明文化と解像度アップ
 def enrich_card_data(row):
     original_ctype = row['text_content_type']
     pri = row['priority']
@@ -299,13 +301,12 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        # 💡 Aランクになった理由を明確に提示
         if duration < 1.0:
             return "様子見", "短期間の局地的な反応（スパイク）のため、継続するか様子見"
         elif not has_net:
-            return "監視継続", "反応はあるが、関連テーマへの広がりが弱く今すぐ仕込むには根拠不足"
+            return "監視継続", "反応や新規性はあるが、関連テーマへの広がりが弱く今すぐ仕込むには根拠不足"
         else:
-            return "監視継続", "注目候補ではあるが、観測期間が短く継続判定に届いていないため様子見"
+            return "監視継続", "注目候補ではあるが、観測期間や投稿数が少なく継続判定に届いていないため様子見"
             
     else: 
         if duration < 1.0:
@@ -322,6 +323,11 @@ df_display['priority'] = pd.Categorical(df_display['priority'], categories=prior
 df_display = df_display.sort_values(by=['priority', 'action', 'score_eos', 'score_css'], ascending=[True, True, False, False])
 
 df_display['plot_label'] = df_display.apply(lambda r: r['Rank_Num'] if r['Rank_Num'] else "", axis=1)
+
+# 💡 スコアのフォーマット処理 (一覧表での検証用)
+for col in ['novelty_z', 'growth_z', 'sustainability_z', 'conversion_z', 'bridge_z']:
+    if col in df_display.columns:
+        df_display[col] = df_display[col].round(2)
 
 # ==========================================
 # 7. UI 描画 (結果画面)
@@ -355,7 +361,6 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if count_s == 0:
-    # 💡 Aランクが残った理由を動的に取得し、サマリー文を具体化
     if count_a > 0:
         a_reasons = df_display[df_display['priority'] == "👀 A (保留)"]['reason'].tolist()
         if any("スパイク" in r for r in a_reasons):
@@ -417,6 +422,7 @@ st.divider()
 st.subheader("📋 行動計画・キーワード一覧")
 st.caption("S=今すぐ着手 / A=監視しつつ検討 / C=今回は見送り")
 
+# 💡 一覧表に「ブラックボックスを解明する」内部スコアを追加
 view_cols = {
     'priority': '優先度',
     'token': 'キーワード', 
@@ -424,10 +430,13 @@ view_cols = {
     'text_content_type': '推奨投稿型',
     'reason': '判定理由',
     'score_css': '話題力(CSS)', 
-    'score_eos': 'ポテンシャル(EOS)', 
+    'score_eos': 'ポテンシャル(EOS)',
+    'novelty_z': '新規性',
+    'growth_z': '成長率',
+    'sustainability_z': '継続性',
+    'conversion_z': '広がり'
 }
 
-# 💡 S=0のケースでも、この一覧表で「なぜAになったか」「なぜCになったか」の詳細な根拠が必ず表示されます
 st.dataframe(
     df_display[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
