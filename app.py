@@ -198,25 +198,28 @@ df_display['text_content_type'] = df_display.apply(
     axis=1
 )
 
-# 推奨アクションと型の分離、優先度・順位に基づく「理由の差別化」
+# ランクと順位に基づく「アクション」と「理由」の多様化
 def enrich_card_data(row):
     ctype = row['text_content_type']
     pri = row['priority']
     rank = row['Rank_Num']
     
     if pri == "🔥 S (最優先)":
-        if rank == "①":
-            reason = "圧倒的な成長率と新規性を持ち、今すぐ先回りすべき本命"
-        elif rank == "②":
-            reason = "関連テーマへの広がりが強く、独自の切り口で狙える"
-        else:
-            reason = "反応が急増しており、継続監視しつつ先読みが効く"
+        # TOP3の理由を書き分ける
+        if rank == "①": reason = "圧倒的な成長率と新規性を持ち、今すぐ先回りすべき本命"
+        elif rank == "②": reason = "関連テーマへの広がりが強く、独自の切り口で狙える"
+        else: reason = "反応が急増しており、継続監視しつつ先読みが効く"
             
-        if ctype == "先読み型": action = "今すぐ仕込み投稿"
-        elif ctype == "解説型": action = "今すぐ解説投稿"
-        elif ctype == "比較型": action = "今すぐ比較投稿"
-        elif ctype == "まとめ型": action = "今すぐまとめ投稿"
-        else: action = "今すぐ投稿"
+        # アクションのニュアンスを順位ごとに分ける
+        if ctype == "先読み型": base_noun = "仕込み投稿"
+        elif ctype == "解説型": base_noun = "解説投稿"
+        elif ctype == "比較型": base_noun = "比較投稿"
+        elif ctype == "まとめ型": base_noun = "まとめ投稿"
+        else: base_noun = "投稿"
+        
+        if rank == "①": action = f"今すぐ{base_noun}"
+        elif rank == "②": action = f"先に押さえる{base_noun}"
+        else: action = f"継続監視しつつ{base_noun}"
         
         return action, reason
         
@@ -226,8 +229,13 @@ def enrich_card_data(row):
         else:
             return "様子見", "局地的な反応はあるが、ポテンシャル(EOS)の上昇待ち"
             
-    else:
-        return "今回は見送り", "話題力・ポテンシャル共に低迷しているため"
+    else: # Cランクの理由もスコア傾向に応じて書き分ける
+        if row['score_css'] >= 30:
+            return "今回は見送り", "話題は残っているが、ポテンシャル(EOS)の伸びが鈍化"
+        elif row['score_eos'] >= 30:
+            return "今回は見送り", "局地的な動きはあるが、全体としての需要が限定的"
+        else:
+            return "今回は見送り", "話題力・ポテンシャル共に低迷しており優先度低"
 
 df_display[['action', 'reason']] = df_display.apply(lambda r: pd.Series(enrich_card_data(r)), axis=1)
 
@@ -242,8 +250,8 @@ df_display['plot_label'] = df_display.apply(lambda r: r['Rank_Num'] if r['Rank_N
 # ==========================================
 # 7. UI 描画 (結果画面)
 # ==========================================
-# 通知は極限まで薄く・小さく
-st.markdown("<div style='color: #aaa; font-size: 0.8em; margin-bottom: 8px;'>分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
+# 通知は色を抑えてさらに小さく
+st.markdown("<div style='color: #888; font-size: 0.85em; margin-bottom: 8px;'>分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
 
 # --- A. 企画案 コンパクト要約 ---
 st.subheader("🔥 最優先テーマ 3件")
@@ -251,32 +259,45 @@ top3_ideas = df_display[df_display['Rank_Num'] != ""].sort_values(by='Rank_Num')
 
 if not top3_ideas.empty:
     for _, row in top3_ideas.iterrows():
-        # ①②③の色を赤く強調、余白(margin-bottom)を広げ、理由の視認性をUP
+        # 行間の余白(margin-bottom)を広げ、1件ずつの塊を強調。青字リンク風をバッジ風に。
         st.markdown(f"""
-        <div style="margin-bottom: 24px;">
-            <div style="display: flex; align-items: center; margin-bottom: 6px;">
+        <div style="margin-bottom: 32px; padding-bottom: 8px;">
+            <div style="display: flex; align-items: center; margin-bottom: 8px;">
                 <span style="font-size: 1.4em; color: #d32f2f; font-weight: bold; margin-right: 8px;">{row['Rank_Num']}</span>
                 <span style="font-size: 1.2em; font-weight: bold; margin-right: 12px;">{row['token']}</span>
-                <span style="background-color: #e3f2fd; color: #1976d2; padding: 4px 10px; border-radius: 4px; font-size: 0.85em; font-weight: bold; margin-right: 8px;">{row['action']}</span>
+                <span style="background-color: #f0f4f8; border: 1px solid #d0e2f3; color: #1976d2; padding: 2px 10px; border-radius: 12px; font-size: 0.85em; font-weight: bold; margin-right: 8px;">{row['action']}</span>
                 <span style="color: #666; font-size: 0.85em;">（{row['text_content_type']}）</span>
             </div>
-            <div style="color: #444; font-size: 0.95em; margin-left: 36px;">{row['reason']}</div>
+            <div style="color: #444; font-size: 0.95em; margin-left: 36px; line-height: 1.5;">{row['reason']}</div>
         </div>
         """, unsafe_allow_html=True)
 else:
     st.write("現在、強い推奨案はありません。")
 
-st.markdown("<br>", unsafe_allow_html=True)
-
 # --- B. トレンドマップ ---
 st.subheader("📊 トレンド四象限マップ")
-# キーワード部分のみ太字化し、視認性を向上
-st.markdown("<div style='color: #444; font-size: 0.95em; margin-top: 8px; margin-bottom: 16px;'>左上=<b>先回り候補</b> / 右上=<b>本命</b> / 右下=<b>後追い</b> / 左下=<b>見送り</b></div>", unsafe_allow_html=True)
+# 視認性を上げつつ文字数を抑えたピンポイントな説明
+st.markdown("<div style='color: #222; font-weight: bold; font-size: 1.0em; margin-top: 8px; margin-bottom: 16px;'>📍 【左上】先回り候補 ／ 【右上】本命 ／ 【右下】後追い ／ 【左下】見送り</div>", unsafe_allow_html=True)
+
+# マップの色分け定義 (S:青・緑系, A:紫, C:グレー に厳密にコントロール)
+color_discrete_map = {
+    "先読み型": "#1976D2", # S: 強い青
+    "解説型": "#0288D1",   # S: 青
+    "比較型": "#0097A7",   # S: ターコイズ
+    "まとめ型": "#388E3C", # S: 緑
+    "注目型": "#9C27B0",   # A: 紫
+    "保留": "#BA68C8",     # A: 薄紫
+    "見送り": "#BDBDBD"    # C: グレー
+}
+# 凡例の並び順も優先度順(S -> A -> C)に固定
+category_orders = {"text_content_type": ["先読み型", "解説型", "比較型", "まとめ型", "注目型", "保留", "見送り"]}
 
 fig = px.scatter(
     df_display, x="score_css", y="score_eos", text="plot_label", size="freq_raw", color="text_content_type",
     hover_name="token", hover_data={"plot_label": False, "text_content_type": True, "action": True, "freq_raw": True},
     labels={"score_css": "話題力 (Current Strength)", "score_eos": "ポテンシャル (Emerging Opportunity)", "text_content_type": "推奨投稿型", "token": "キーワード"},
+    color_discrete_map=color_discrete_map,
+    category_orders=category_orders,
     height=550
 )
 fig.update_traces(textposition='top right', textfont_size=18, textfont_color="#d32f2f")
@@ -306,8 +327,8 @@ st.dataframe(
     use_container_width=True, hide_index=True
 )
 
-# ラベルを自然に変更し、初期状態は閉じておく
-with st.expander("💡 投稿型の使い分け", expanded=False):
+# ラベルを最適化し、初期状態は閉じておく
+with st.expander("💡 投稿型の意味と使い分け", expanded=False):
     st.markdown("""
     * **先読み型:** まだ競争が浅く、これから伸びるテーマ。いち早く発信することで第一人者ポジションを狙えます。
     * **解説型:** 今話題になり始めているテーマ。検索需要に応える図解や基本解説が刺さります。
