@@ -47,7 +47,8 @@ Pythonの学習ロードマップまとめ。初心者必見！,2023-10-01 13:00
 # ==========================================
 with st.sidebar:
     st.header("STEP 1: データ読み込み")
-    st.write("CSVを選択すると自動で分析を開始します。（上限200MB）")
+    # 文言を短縮し、より行動志向に
+    st.write("CSVを選択すると分析を開始します（上限200MB）")
     
     uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
     st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
@@ -192,25 +193,22 @@ def set_priority(row):
 
 df_display['priority'] = df_display.apply(set_priority, axis=1)
 
-# Aランクの「見送り」という投稿型表記を「保留」に書き換え、矛盾をなくす
+# Aランクの投稿型を「保留」に統一し、凡例をスッキリさせる
 df_display['text_content_type'] = df_display.apply(
-    lambda r: "保留" if r['priority'] == "👀 A (監視・次点)" and r['text_content_type'] == "見送り" else r['text_content_type'], 
+    lambda r: "保留" if r['priority'] == "👀 A (監視・次点)" and r['text_content_type'] in ["見送り", "注目型"] else r['text_content_type'], 
     axis=1
 )
 
-# ランクと順位に基づく「アクション」と「理由」の多様化
 def enrich_card_data(row):
     ctype = row['text_content_type']
     pri = row['priority']
     rank = row['Rank_Num']
     
     if pri == "🔥 S (最優先)":
-        # TOP3の理由を書き分ける
         if rank == "①": reason = "圧倒的な成長率と新規性を持ち、今すぐ先回りすべき本命"
         elif rank == "②": reason = "関連テーマへの広がりが強く、独自の切り口で狙える"
         else: reason = "反応が急増しており、継続監視しつつ先読みが効く"
             
-        # アクションのニュアンスを順位ごとに分ける
         if ctype == "先読み型": base_noun = "仕込み投稿"
         elif ctype == "解説型": base_noun = "解説投稿"
         elif ctype == "比較型": base_noun = "比較投稿"
@@ -229,29 +227,28 @@ def enrich_card_data(row):
         else:
             return "様子見", "局地的な反応はあるが、ポテンシャル(EOS)の上昇待ち"
             
-    else: # Cランクの理由もスコア傾向に応じて書き分ける
+    else: 
+        # Cランクの理由のテンプレ感を払拭
         if row['score_css'] >= 30:
-            return "今回は見送り", "話題は残っているが、ポテンシャル(EOS)の伸びが鈍化"
+            return "今回は見送り", "話題は残っているが、伸びが止まっている"
         elif row['score_eos'] >= 30:
-            return "今回は見送り", "局地的な動きはあるが、全体としての需要が限定的"
+            return "今回は見送り", "局地的な動きはあるが、広がりが弱い"
         else:
-            return "今回は見送り", "話題力・ポテンシャル共に低迷しており優先度低"
+            return "今回は見送り", "話題力・ポテンシャル共に低迷しており優先度が低い"
 
 df_display[['action', 'reason']] = df_display.apply(lambda r: pd.Series(enrich_card_data(r)), axis=1)
 
-# 並び順の徹底
 priority_order = ["🔥 S (最優先)", "👀 A (監視・次点)", "➖ C (見送り)"]
 df_display['priority'] = pd.Categorical(df_display['priority'], categories=priority_order, ordered=True)
 df_display = df_display.sort_values(by=['priority', 'action', 'score_eos', 'score_css'], ascending=[True, True, False, False])
 
-# マップ上のラベル設定（重なりを防ぐため、番号のみを表示）
 df_display['plot_label'] = df_display.apply(lambda r: r['Rank_Num'] if r['Rank_Num'] else "", axis=1)
 
 # ==========================================
 # 7. UI 描画 (結果画面)
 # ==========================================
-# 通知は色を抑えてさらに小さく
-st.markdown("<div style='color: #888; font-size: 0.85em; margin-bottom: 8px;'>分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
+# 成功メッセージは極限まで薄く
+st.markdown("<div style='color: #aaa; font-size: 0.85em; margin-bottom: 8px;'>分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
 
 # --- A. 企画案 コンパクト要約 ---
 st.subheader("🔥 最優先テーマ 3件")
@@ -259,16 +256,16 @@ top3_ideas = df_display[df_display['Rank_Num'] != ""].sort_values(by='Rank_Num')
 
 if not top3_ideas.empty:
     for _, row in top3_ideas.iterrows():
-        # 行間の余白(margin-bottom)を広げ、1件ずつの塊を強調。青字リンク風をバッジ風に。
+        # 余白を広げ、理由を薄くし、番号とキーワードの間隔を確保
         st.markdown(f"""
-        <div style="margin-bottom: 32px; padding-bottom: 8px;">
-            <div style="display: flex; align-items: center; margin-bottom: 8px;">
-                <span style="font-size: 1.4em; color: #d32f2f; font-weight: bold; margin-right: 8px;">{row['Rank_Num']}</span>
-                <span style="font-size: 1.2em; font-weight: bold; margin-right: 12px;">{row['token']}</span>
+        <div style="margin-bottom: 36px; padding-bottom: 4px;">
+            <div style="display: flex; align-items: center; margin-bottom: 6px;">
+                <span style="font-size: 1.4em; color: #d32f2f; font-weight: bold; margin-right: 12px;">{row['Rank_Num']}</span>
+                <span style="font-size: 1.2em; font-weight: bold; margin-right: 16px;">{row['token']}</span>
                 <span style="background-color: #f0f4f8; border: 1px solid #d0e2f3; color: #1976d2; padding: 2px 10px; border-radius: 12px; font-size: 0.85em; font-weight: bold; margin-right: 8px;">{row['action']}</span>
                 <span style="color: #666; font-size: 0.85em;">（{row['text_content_type']}）</span>
             </div>
-            <div style="color: #444; font-size: 0.95em; margin-left: 36px; line-height: 1.5;">{row['reason']}</div>
+            <div style="color: #666; font-size: 0.9em; margin-left: 40px; line-height: 1.5;">{row['reason']}</div>
         </div>
         """, unsafe_allow_html=True)
 else:
@@ -276,21 +273,19 @@ else:
 
 # --- B. トレンドマップ ---
 st.subheader("📊 トレンド四象限マップ")
-# 視認性を上げつつ文字数を抑えたピンポイントな説明
-st.markdown("<div style='color: #222; font-weight: bold; font-size: 1.0em; margin-top: 8px; margin-bottom: 16px;'>📍 【左上】先回り候補 ／ 【右上】本命 ／ 【右下】後追い ／ 【左下】見送り</div>", unsafe_allow_html=True)
+# 見出し感を強めた1行説明
+st.markdown("<div style='color: #333; font-weight: bold; font-size: 0.95em; margin-top: 8px; margin-bottom: 16px;'>🗺️ マップの見方： [左上] 先回り候補 ／ [右上] 本命 ／ [右下] 後追い ／ [左下] 見送り</div>", unsafe_allow_html=True)
 
-# マップの色分け定義 (S:青・緑系, A:紫, C:グレー に厳密にコントロール)
+# マップの色分け定義と凡例順序の固定化（色彩心理学に基づく調整）
 color_discrete_map = {
     "先読み型": "#1976D2", # S: 強い青
     "解説型": "#0288D1",   # S: 青
     "比較型": "#0097A7",   # S: ターコイズ
     "まとめ型": "#388E3C", # S: 緑
-    "注目型": "#9C27B0",   # A: 紫
-    "保留": "#BA68C8",     # A: 薄紫
-    "見送り": "#BDBDBD"    # C: グレー
+    "保留": "#9FA8DA",     # A: グレイッシュな紫 (目立ちすぎず、グレーとも違う)
+    "見送り": "#BDBDBD"    # C: グレー (危険な赤を排除)
 }
-# 凡例の並び順も優先度順(S -> A -> C)に固定
-category_orders = {"text_content_type": ["先読み型", "解説型", "比較型", "まとめ型", "注目型", "保留", "見送り"]}
+category_orders = {"text_content_type": ["先読み型", "解説型", "比較型", "まとめ型", "保留", "見送り"]}
 
 fig = px.scatter(
     df_display, x="score_css", y="score_eos", text="plot_label", size="freq_raw", color="text_content_type",
@@ -327,7 +322,7 @@ st.dataframe(
     use_container_width=True, hide_index=True
 )
 
-# ラベルを最適化し、初期状態は閉じておく
+# 常時表示を避け、初期状態は閉じたアコーディオンに格納
 with st.expander("💡 投稿型の意味と使い分け", expanded=False):
     st.markdown("""
     * **先読み型:** まだ競争が浅く、これから伸びるテーマ。いち早く発信することで第一人者ポジションを狙えます。
