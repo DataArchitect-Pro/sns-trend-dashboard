@@ -129,9 +129,9 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             
         sustainability_raw = min(1.0, duration_hours / 72.0) if duration_hours > 0 else 0.0
         
-        # 💡 競争激化ペナルティ：総Engが2000を超えると新規性が0.0になり「飽和」と判定される
+        # 💡 競争激化ペナルティの厳格化：総Eng 800以上で新規性を強制的に0.0に沈め、飽和と判定させる
         total_eng = word_eng[w]
-        novelty_raw = max(0.0, 1.0 - (total_eng / 2000.0))
+        novelty_raw = max(0.0, 1.0 - (total_eng / 800.0))
         
         features.append({
             'token': w,
@@ -210,7 +210,7 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     df['is_high_css'] = df['score_css'] >= 40
     df['is_high_eos'] = df['score_eos'] >= 50
-    # 💡 飽和判定フラグを付与
+    # 💡 新規性が低い単語は完全に「飽和フラグ」を立てる
     df['is_saturated'] = df['novelty_z'] < 0.3
 
     def generate_text(row):
@@ -225,11 +225,11 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         is_yt_heavy = x_ratio < 0.3
         is_x_heavy = x_ratio > 0.7
         
-        # 💡 飽和した巨大ワードは「解説」「比較」「まとめ」に強制固定（速報や先読みにはならない）
+        # 💡 飽和した巨大ワードは強制的に「解説・比較・まとめ」に固定し、速報・先読みを禁止する
         if is_saturated:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif is_yt_heavy or row['conversion_z'] >= 0.2: return "解説型", f"【最新版】「{kw}」の活用法まとめ"
-            else: return "反応まとめ型", f"【みんなの反応】「{kw}」に対する活用事例"
+            else: return "まとめ型", f"【まとめ】今さら聞けない「{kw}」、みんなの活用事例"
             
         # 未飽和語の通常分岐
         if is_cross:
