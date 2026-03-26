@@ -21,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意
+# 2. サンプルデータの用意 (省略せずに記載)
 # ==========================================
 SAMPLE_CSV = """text,posted_at,platform,eng,id
 次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
@@ -244,12 +244,14 @@ if df.empty:
 # ==========================================
 # 6. 結果の事後処理 (ランキング・サマリーの構築)
 # ==========================================
-df_display = df if show_noise else df[~df['is_noise']].copy()
+df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 
+# 💡 Sランク候補の厳格化: ネットワーク(文脈)の広がりと時間的継続性の両方を要求
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0) | (df_display['centrality_z'] > 0)
+has_sustainability = df_display['duration_hours'] >= 1.0 # 1時間以上の継続性があるか
 is_high_score = (df_display['score_eos'] >= 55) | (df_display['score_css'] >= 55)
 
-s_candidates = df_display[has_network & is_high_score].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
+s_candidates = df_display[has_network & has_sustainability & is_high_score].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 
 top3_indices = s_candidates.head(3).index
 df_display['Rank_Num'] = ""
@@ -258,9 +260,13 @@ if len(top3_indices) > 0: df_display.loc[top3_indices[0], 'Rank_Num'] = "①"
 if len(top3_indices) > 1: df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
 if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 
+# 💡 AとCの境界線ルールの実装
 def set_priority(row):
-    if row['Rank_Num'] != "": return "🔥 S (最優先)"
-    if row['score_eos'] >= 45 or row['score_css'] >= 45: return "👀 A (保留)"
+    if row['Rank_Num'] != "": 
+        return "🔥 S (最優先)"
+    # エンゲージメント・頻度が非常に高い（スパイク等）場合はCに落とさずAに残す
+    if row['score_css'] >= 45 or row['engagement_z'] >= 0.7 or row['freq_z'] >= 0.7: 
+        return "👀 A (保留)"
     return "➖ C (見送り)"
 
 df_display['priority'] = df_display.apply(set_priority, axis=1)
@@ -270,10 +276,12 @@ df_display['text_content_type'] = df_display.apply(
     axis=1
 )
 
+# 💡 AとCの理由の明文化（時間推移やネットワークの状況に基づく）
 def enrich_card_data(row):
     original_ctype = row['text_content_type']
     pri = row['priority']
     rank = row['Rank_Num']
+    duration = row.get('duration_hours', 0)
     
     if pri == "🔥 S (最優先)":
         if rank == "①": reason = "圧倒的な成長率と新規性を持ち、今すぐ先回りすべき本命"
@@ -285,20 +293,21 @@ def enrich_card_data(row):
         elif original_ctype == "比較型": action = "今すぐ比較投稿"
         elif original_ctype == "まとめ型": action = "今すぐまとめ投稿"
         else: action = "今すぐ投稿"
-        
         return action, reason
         
     elif pri == "👀 A (保留)":
-        if row['score_css'] >= 50:
-            return "監視継続", "現状は注目されているが、先回り余地は限定的"
+        if duration < 1.0: # 短期スパイク判定
+            return "監視継続", "短期間の局地的な反応（スパイク）のため、継続するか様子見"
+        elif row['score_css'] >= 50:
+            return "監視継続", "現状は注目されているが、ネットワークの広がりが弱く先回り余地が限定的"
         else:
             return "様子見", "局地的な反応はあるが、ポテンシャル(EOS)の上昇待ち"
             
     else: 
-        if row['score_css'] >= 30:
+        if duration < 1.0:
+            return "今回は見送り", "反応が弱く、継続性もない単発の投稿のため見送り"
+        elif row['score_css'] >= 30:
             return "今回は見送り", "話題は残っているが、伸びが止まっている"
-        elif row['score_eos'] >= 30:
-            return "今回は見送り", "局地的な動きはあるが、広がりが弱い"
         else:
             return "今回は見送り", "話題力・ポテンシャル共に低迷しており優先度が低い"
 
@@ -341,10 +350,9 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 💡 AとCの件数に応じた動的なメッセージ出し分け（より具体的・断定的に）
 if count_s == 0:
     if count_a > 0:
-        msg = "一時的な反応は確認されましたが、継続性と広がりが限定的なため、今回は「保留」と判定しました。"
+        msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続性と広がりが限定的なため、今回は「保留」と判定しました。"
     else:
         msg = "一部の語に反応は観測されましたが、継続性と広がりが弱く、今回は「見送り」判定となりました。"
     st.info(f"💡 **現在、今すぐ着手すべき強い推奨案（Sランク）はありません。**\n\n{msg}")
@@ -407,7 +415,6 @@ view_cols = {
     'score_eos': 'ポテンシャル(EOS)', 
 }
 
-# 💡 常に一覧表を表示し、なぜ保留/見送りになったかの根拠を提供する
 st.dataframe(
     df_display[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
