@@ -253,14 +253,9 @@ has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
-
-# 💡 ValueError防止のため、ビット演算子 & を使用
-is_continuous = (df_display['sustainability_z'] >= 0.7) & (df_display['growth_z'] >= 0.5)
-
-# 💡 巨大すぎる完全飽和(ChatGPTなど)は継続上昇でも絶対にSに上げないためのフラグ
+is_continuous = (df_display.get('sustainability_z', 0) >= 0.7) & (df_display.get('growth_z', 0) >= 0.5)
 is_fully_saturated = df_display['novelty_z'] <= 0.05
 
-# 💡 S条件の厳密化：完全飽和はSブロック、やや飽和(0.1~0.3)なら継続特例でS昇格を許容
 s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~is_fully_saturated) & is_high_score & (has_network | is_emerging | is_continuous) & ((~df_display.get('is_saturated', False)) | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
@@ -285,14 +280,18 @@ def set_priority(row):
 
 df_display['priority'] = df_display.apply(set_priority, axis=1)
 
-# 💡 飽和語のAランクは、速報などを防ぐため強制的に保留型の投稿に上書き
-df_display['text_content_type'] = df_display.apply(
-    lambda r: "保留" if r['priority'] == "👀 A (保留)" and not r.get('is_saturated', False) else r['text_content_type'], 
-    axis=1
-)
+# 💡 Aランクになった場合でも、スパイク語や飽和語は元々の「速報型」「解説型」等を優先し「保留」で塗りつぶさない
+def override_ctype(r):
+    if r['priority'] == "👀 A (保留)":
+        if r.get('duration_hours', 1.0) < 1.0: return r['text_content_type']  # スパイクは速報等維持
+        if r.get('is_saturated', False): return r['text_content_type']        # 飽和は比較・解説等維持
+        return "保留" # 単なる惜しいAは保留
+    return r['text_content_type']
 
-# 💡 一覧表の可視化フラグ
-df_display['spike_penalty'] = is_spike.apply(lambda x: "作動(一発バズ)" if x else "なし")
+df_display['text_content_type'] = df_display.apply(override_ctype, axis=1)
+
+# 💡 一覧表可視化：スパイク(一発バズ)であることを強調
+df_display['spike_penalty'] = is_spike.apply(lambda x: "作動(継続性不足)" if x else "なし")
 df_display['saturated_penalty'] = df_display.get('is_saturated', False).apply(lambda x: "作動(S昇格不可)" if x else "なし")
 
 def enrich_card_data(row):
@@ -316,7 +315,6 @@ def enrich_card_data(row):
         action = "今すぐ" + original_ctype.replace('型', '投稿')
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         
-        # 💡 Sランク理由の分岐
         if is_continuous_flag:
             reason = "数日単位で安定して伸びており、一時的なスパイクではない継続上昇テーマ"
         elif novelty >= 0.5:
@@ -330,13 +328,13 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        # 💡 Aランク：優先度を「完全飽和(巨大語)」＞「スパイク(一発バズ)」＞「惜しい継続」の順で評価
-        if is_fully_saturated_flag or is_saturated_flag:
+        # 💡 [最優先判定] Aランクの理由はスパイク(一発バズ)判定を最上位に置く
+        if is_spike_flag:
+            return "様子見", "一時的急騰による局地的反応のため、継続性不透明であり一旦様子見"
+        elif is_fully_saturated_flag or is_saturated_flag:
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
-        elif is_spike_flag:
-            return "継続確認待ち", "短期間の局地的な反応（スパイク）のため、トレンドが継続するか様子見"
         elif is_continuous_flag:
-            return "準本命候補", "数日単位で安定して成長しているが、Sランク昇格には話題力や広がりがあと一歩不足"
+            return "準本命候補", "数日単位で継続上昇しているが、Sランク昇格には話題力や広がりがあと一歩不足"
         elif not has_net:
             return "様子見", "反応や新規性はあるが、関連テーマへの広がりが弱く今すぐ仕込むには根拠不足"
         else:
@@ -400,10 +398,10 @@ st.markdown(f"""
 if count_s == 0:
     if count_a > 0:
         a_reasons = df_display[df_display['priority'] == "👀 A (保留)"]['reason'].tolist()
-        if any("後追いリスク" in r for r in a_reasons):
+        if any("一時的急騰" in r for r in a_reasons):
+            msg = "短期間での一時的急騰（局地的反応）は確認されましたが、継続性不透明のため「様子見」と判定しました。"
+        elif any("後追いリスク" in r for r in a_reasons):
             msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
-        elif any("スパイク" in r for r in a_reasons):
-            msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続するか不透明なため、今回は「保留」と判定しました。"
         elif any("継続上昇" in r for r in a_reasons):
             msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
         else:
@@ -478,8 +476,8 @@ view_cols = {
     'sustainability_z': '継続性',
     'conversion_z': '広がり',
     'cross_platform_z': '媒体横断性', 
-    'spike_penalty': 'スパイク判定', 
-    'saturated_penalty': '飽和判定' 
+    'spike_penalty': '短時間集中ペナルティ', # 💡 名称変更（一発バズ可視化）
+    'saturated_penalty': '飽和ペナルティ' 
 }
 
 st.dataframe(
