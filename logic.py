@@ -195,10 +195,13 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
         0.20 * df['centrality_z'] + 0.10 * df['growth_z'] + 0.10 * df['cross_platform_z']
     ) * 100
 
+    # 💡 YouTube特化語は話題力(CSS)が低くても、継続視聴・検索文脈を評価してEOSを底上げ(+10)
+    yt_bonus = (df['x_ratio'] < 0.3).astype(float) * 10.0
+
     df['score_eos'] = (
         0.25 * df['growth_z'] + 0.25 * df['sustainability_z'] + 0.20 * df['novelty_z'] +
         0.15 * df['bridge_z'] + 0.10 * df['conversion_z'] + 0.05 * df['cross_platform_z']
-    ) * 100
+    ) * 100 + yt_bonus
 
     df['score_css'] = df['score_css'].clip(0, 100).round(1)
     df['score_eos'] = df['score_eos'].clip(0, 100).round(1)
@@ -216,34 +219,38 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         cross = row.get('cross_platform_z', 0.0)
         is_saturated = row.get('is_saturated', False)
         is_continuous = row.get('sustainability_z', 0.0) >= 0.7 and row.get('growth_z', 0.0) >= 0.5
-        is_spike = row.get('duration_hours', 1.0) < 1.0 # 💡 スパイク判定
+        is_spike = row.get('duration_hours', 1.0) < 1.0 
 
         if kw in MAGIC_WORDS: return "見送り", ""
         
+        # 媒体バイアスの定義
         is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
         is_yt_heavy = x_ratio < 0.3
         is_x_heavy = x_ratio > 0.7
         
-        # 💡 [最優先判定] 短時間スパイク（一発バズ）は飽和よりも優先して速報・反応まとめに落とす
+        # 💡 [最優先判定] 短時間スパイク（一発バズ）は速報・反応まとめに落とす
         if is_spike:
             if row.get('novelty_z', 0) >= 0.5: return "速報型", f"【速報】話題急騰中の「{kw}」まとめ"
             else: return "反応まとめ型", f"【局地的バズ】「{kw}」に対するみんなの反応"
 
+        # 💡 飽和語は強制的に解説・比較・反応まとめに固定
         if is_saturated and not is_continuous:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif is_yt_heavy or row['conversion_z'] >= 0.2: return "解説型", f"【最新版】「{kw}」の活用法まとめ"
             else: return "反応まとめ型", f"【みんなの反応】「{kw}」に対する活用事例"
             
+        # 💡 媒体差による通常分岐（パターン7向けに完全分離）
         if is_cross:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
-            elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
             else: return "網羅まとめ型", f"【完全網羅】話題の「{kw}」に関する全情報"
         elif is_x_heavy:
             if row['novelty_z'] >= 0.5 or is_continuous: return "速報型", f"【速報】Xで話題沸騰中の「{kw}」とは？"
             else: return "反応まとめ型", f"【Xで話題】「{kw}」に対するみんなの反応"
-        else:
+        elif is_yt_heavy:
             if row['conversion_z'] >= 0.2 or row['is_high_css']: return "解説型", f"【分かりやすく解説】「{kw}」の基本と使い方"
-            else: return "検証型", f"【検証】噂の「{kw}」を実際に試してみた"
+            else: return "初心者向け", f"【初心者向け】噂の「{kw}」をゼロから解説"
+
+        return "解説型", f"【解説】「{kw}」について"
 
     df[['text_content_type', 'text_title_seed']] = df.apply(lambda r: pd.Series(generate_text(r)), axis=1)
     return df
