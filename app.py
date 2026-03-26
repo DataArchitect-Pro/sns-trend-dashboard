@@ -248,15 +248,17 @@ df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_no
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
 df_display['is_low_impact'] = df_display['engagement_raw'] < 5.0
+# 💡 新規性による飽和度判定フラグ（巨大ワードを識別）
+df_display['is_saturated'] = df_display['novelty_z'] < 0.3
 
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
-# 💡 継続性フラグ（継続上昇パターンの救済）
 is_continuous = df_display.get('sustainability_z', 0) >= 0.7
 
-s_condition = (~is_spike) & (~df_display['is_low_impact']) & is_high_score & (has_network | is_emerging | is_continuous)
+# 💡 Sランクへの昇格条件に「(~df_display['is_saturated'])」を追加し、飽和語を強制ブロック
+s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~df_display['is_saturated']) & is_high_score & (has_network | is_emerging | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 top3_indices = s_candidates.head(3).index
@@ -285,6 +287,9 @@ df_display['text_content_type'] = df_display.apply(
     axis=1
 )
 
+# 💡 一覧表用の明示的なペナルティ可視化カラムを追加
+df_display['saturated_penalty'] = df_display['is_saturated'].apply(lambda x: "あり(S昇格不可)" if x else "なし")
+
 def enrich_card_data(row):
     original_ctype = row['text_content_type']
     pri = row['priority']
@@ -305,7 +310,6 @@ def enrich_card_data(row):
         action = "今すぐ" + original_ctype.replace('型', '投稿')
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         
-        # 💡 Sランク：継続上昇(パターン8)専用の理由文を追加
         if is_continuous_flag:
             reason = "数日単位で安定して伸びており、今のうちに押さえるべき継続上昇テーマ"
         elif novelty >= 0.5:
@@ -322,8 +326,8 @@ def enrich_card_data(row):
         if is_spike_flag:
             return "継続確認待ち", "短期間の局地的な反応（スパイク）のため、トレンドが継続するか様子見"
         elif is_saturated_flag:
+            # 💡 巨大飽和ワード（ChatGPTなど）専用の的確な理由
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
-        # 💡 Aランク：継続上昇だが惜しい(パターン8)専用の理由文を追加
         elif is_continuous_flag:
             return "準本命候補", "数日単位で継続上昇しているが、Sランク昇格には話題力や広がりがあと一歩不足"
         elif not has_net:
@@ -351,7 +355,7 @@ df_display = df_display.sort_values(by=['priority', 'action', 'score_eos', 'scor
 
 df_display['plot_label'] = df_display.apply(lambda r: r['Rank_Num'] if r['Rank_Num'] else "", axis=1)
 
-for col in ['novelty_z', 'growth_z', 'sustainability_z', 'conversion_z', 'bridge_z']:
+for col in ['novelty_z', 'growth_z', 'sustainability_z', 'conversion_z', 'bridge_z', 'cross_platform_z']:
     if col in df_display.columns:
         df_display[col] = df_display[col].round(2)
 
@@ -392,7 +396,6 @@ if count_s == 0:
         if any("スパイク" in r for r in a_reasons):
             msg = "短期間の局地的な反応（スパイク）は確認されましたが、継続するか不透明なため、今回は「保留」と判定しました。"
         elif any("継続上昇" in r for r in a_reasons):
-            # 💡 S=0, A=継続上昇(パターン8) 専用の動的メッセージ
             msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
         elif any("後追いリスク" in r for r in a_reasons):
             msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
@@ -466,7 +469,9 @@ view_cols = {
     'novelty_z': '新規性',
     'growth_z': '成長率',
     'sustainability_z': '継続性',
-    'conversion_z': '広がり'
+    'conversion_z': '広がり',
+    'cross_platform_z': '媒体横断性', # 💡 追加
+    'saturated_penalty': '飽和ペナルティ' # 💡 追加
 }
 
 st.dataframe(
