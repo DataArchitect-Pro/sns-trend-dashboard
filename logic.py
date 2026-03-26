@@ -149,21 +149,27 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
     
     for col in target_cols:
         vals = df[[col]].fillna(0).values
-        robust_vals = robust.fit_transform(vals)
-        robust_vals_clipped = np.clip(robust_vals, a_min=None, a_max=3.0)
-        
-        # 💡 バグ修正：単一キーワードのみ抽出された場合、偏差値0に潰れないように保護
-        if robust_vals_clipped.max() == robust_vals_clipped.min():
-            scaled = np.ones_like(robust_vals_clipped).flatten() if robust_vals_clipped.max() > 0 else np.zeros_like(robust_vals_clipped).flatten()
+        # 💡 バグ修正: 単語数が1件だけで偏差値が計算できない場合でも、絶対値があればハイスコア(1.0)を与える
+        if len(vals) == 1:
+            scaled = np.array([1.0]) if vals[0][0] > 0 else np.array([0.0])
             df[col.replace('_raw', '_z').replace('_log', '_z')] = scaled
         else:
-            df[col.replace('_raw', '_z').replace('_log', '_z')] = minmax.fit_transform(robust_vals_clipped).flatten()
+            robust_vals = robust.fit_transform(vals)
+            robust_vals_clipped = np.clip(robust_vals, a_min=None, a_max=3.0)
+            if robust_vals_clipped.max() == robust_vals_clipped.min():
+                scaled = np.ones_like(robust_vals_clipped).flatten() if vals[0][0] > 0 else np.zeros_like(robust_vals_clipped).flatten()
+                df[col.replace('_raw', '_z').replace('_log', '_z')] = scaled
+            else:
+                df[col.replace('_raw', '_z').replace('_log', '_z')] = minmax.fit_transform(robust_vals_clipped).flatten()
 
     bridge_vals = df[['bridge_raw']].fillna(0).values
-    if bridge_vals.max() == bridge_vals.min():
-        df['bridge_z'] = np.ones_like(bridge_vals).flatten() if bridge_vals.max() > 0 else np.zeros_like(bridge_vals).flatten()
+    if len(bridge_vals) == 1:
+        df['bridge_z'] = np.array([1.0]) if bridge_vals[0][0] > 0 else np.array([0.0])
     else:
-        df['bridge_z'] = minmax.fit_transform(bridge_vals).flatten()
+        if bridge_vals.max() == bridge_vals.min():
+            df['bridge_z'] = np.ones_like(bridge_vals).flatten() if bridge_vals[0][0] > 0 else np.zeros_like(bridge_vals).flatten()
+        else:
+            df['bridge_z'] = minmax.fit_transform(bridge_vals).flatten()
     
     for col in ['cross_platform', 'sustainability', 'noise_risk', 'novelty', 'conversion']:
         df[f'{col}_z'] = df[f'{col}_raw'].fillna(0).clip(0, 1)
@@ -192,24 +198,28 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
 def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
     df['is_noise'] = df['noise_risk_z'] >= 0.8
-    df['is_high_css'] = df['score_css'] >= 40
-    df['is_high_eos'] = df['score_eos'] >= 50
+    df['is_high_css'] = (df['score_css'] >= 40) & (~df['is_noise']) 
+    df['is_high_eos'] = (df['score_eos'] >= 50) & (~df['is_noise'])
+    df['is_explainer'] = df['conversion_z'] >= 0.3
+    df['is_comparative'] = df['bridge_z'] >= 0.3
 
     def generate_text(row):
         kw = row['token']
         if row['is_noise'] or kw in MAGIC_WORDS:
-            return "見送り"
-        if row['bridge_z'] >= 0.3:
-            return "比較型"
-        elif row['is_high_css'] and row['conversion_z'] >= 0.3:
-            return "解説型"
+            return "見送り", ""
+        if row['is_comparative']:
+            return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
+        elif row['is_high_css'] and row['is_explainer']:
+            return "解説型", f"【急上昇】今さら聞けない「{kw}」とは？"
         elif row['is_high_eos'] and row['novelty_z'] >= 0.5:
-            return "先読み型"
+            return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
         elif row['is_high_css']:
-            return "まとめ型"
-        return "見送り"
+            return "まとめ型", f"【まとめ】バズり中の「{kw}」、みんなの反応"
+        elif row['is_high_eos']:
+            return "注目型", f"【注目】局地的に話題の「{kw}」をチェック"
+        return "見送り", ""
 
-    df['text_content_type'] = df.apply(lambda r: generate_text(r), axis=1)
+    df[['text_content_type', 'text_title_seed']] = df.apply(lambda r: pd.Series(generate_text(r)), axis=1)
     return df
 
 def run_pipeline(df_raw: pd.DataFrame, min_freq: int = 3) -> tuple[pd.DataFrame, dict]:
