@@ -246,7 +246,6 @@ if df.empty:
 # ==========================================
 df_display = df if show_noise else df[~df['is_noise']].copy()
 
-# Sランク候補の厳格化: ネットワーク(文脈)の広がりを評価に組み込む
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0) | (df_display['centrality_z'] > 0)
 is_high_score = (df_display['score_eos'] >= 55) | (df_display['score_css'] >= 55)
 
@@ -259,7 +258,6 @@ if len(top3_indices) > 0: df_display.loc[top3_indices[0], 'Rank_Num'] = "①"
 if len(top3_indices) > 1: df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
 if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 
-# 優先度判定: Sランクに漏れた高スコアはAランクへ
 def set_priority(row):
     if row['Rank_Num'] != "": return "🔥 S (最優先)"
     if row['score_eos'] >= 45 or row['score_css'] >= 45: return "👀 A (保留)"
@@ -317,14 +315,12 @@ df_display['plot_label'] = df_display.apply(lambda r: r['Rank_Num'] if r['Rank_N
 # ==========================================
 st.markdown("<div style='color: #aaa; font-size: 0.85em; margin-bottom: 8px;'>分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
 
-# 💡 見出しの短縮
 st.subheader("💡 今回の判定結果")
 
 count_s = len(df_display[df_display['priority'] == "🔥 S (最優先)"])
 count_a = len(df_display[df_display['priority'] == "👀 A (保留)"])
 count_c = len(df_display[df_display['priority'] == "➖ C (見送り)"])
 
-# 💡 サマリーカードに「意味（アクション）」を小さく追加
 st.markdown(f"""
 <div style="display: flex; gap: 16px; margin-bottom: 16px;">
     <div style="background: #f0f7ff; border: 1px solid #90caf9; border-radius: 8px; padding: 12px 24px; text-align: center; flex: 1;">
@@ -345,12 +341,12 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 💡 AとCの件数に応じた動的なメッセージ出し分け
+# 💡 AとCの件数に応じた動的なメッセージ出し分け（より具体的・断定的に）
 if count_s == 0:
     if count_a > 0:
-        msg = "一部の語に反応は観測されましたが、強い推奨候補には至らず、保留候補として抽出されました。"
+        msg = "一時的な反応は確認されましたが、継続性と広がりが限定的なため、今回は「保留」と判定しました。"
     else:
-        msg = "一部の語に反応は観測されましたが、継続性と広がりが弱く、今回は見送り判定となりました。"
+        msg = "一部の語に反応は観測されましたが、継続性と広がりが弱く、今回は「見送り」判定となりました。"
     st.info(f"💡 **現在、今すぐ着手すべき強い推奨案（Sランク）はありません。**\n\n{msg}")
 else:
     top3_ideas = df_display[df_display['Rank_Num'] != ""].sort_values(by='Rank_Num')
@@ -411,7 +407,7 @@ view_cols = {
     'score_eos': 'ポテンシャル(EOS)', 
 }
 
-# 💡 S=0 のケース（今回）でも、一覧表により「なぜ見送りになったか（根拠）」を必ず表示する
+# 💡 常に一覧表を表示し、なぜ保留/見送りになったかの根拠を提供する
 st.dataframe(
     df_display[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
