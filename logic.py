@@ -115,8 +115,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
         fx = word_platforms[w]['X']
         fyt = word_platforms[w]['YouTube']
         cross_platform_raw = (2 * min(fx, fyt)) / (fx + fyt + 1)
-        
-        # 💡 新機能: プラットフォーム比率(Xの割合)を計算
         x_ratio_raw = fx / max(1, fx + fyt)
         
         max_conversion = 0.0
@@ -129,10 +127,12 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
         if len(timestamps) > 1:
             duration_hours = (max(timestamps) - min(timestamps)).total_seconds() / 3600.0
             
-        sustainability_raw = min(1.0, duration_hours / 12.0) if duration_hours > 0 else 0.0
+        # 💡 継続性(Sustainability)のスケールを3日間(72時間)に広げ、じわ伸びを正確に評価
+        sustainability_raw = min(1.0, duration_hours / 72.0) if duration_hours > 0 else 0.0
         
+        # 💡 巨大語ペナルティも、通常の中規模バズではNoveltyが沈まないように調整
         total_eng = word_eng[w]
-        novelty_raw = max(0.0, 1.0 - (total_eng / 1000.0))
+        novelty_raw = max(0.0, 1.0 - (total_eng / 5000.0))
         
         features.append({
             'token': w,
@@ -142,7 +142,7 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             'engagement_raw': word_eng[w] / max(1, word_counts[w]),
             'bridge_raw': betweenness.get(w, 0.0),
             'cross_platform_raw': cross_platform_raw,
-            'x_ratio_raw': x_ratio_raw,  # 追加
+            'x_ratio_raw': x_ratio_raw,
             'sustainability_raw': sustainability_raw,
             'novelty_raw': novelty_raw,
             'conversion_raw': max_conversion,
@@ -185,7 +185,7 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
     for col in ['cross_platform', 'sustainability', 'novelty', 'conversion']:
         df[f'{col}_z'] = df[f'{col}_raw'].fillna(0).clip(0, 1)
         
-    df['x_ratio'] = df['x_ratio_raw'] # 比率は0-1なのでそのまま渡す
+    df['x_ratio'] = df['x_ratio_raw']
         
     return df
 
@@ -194,13 +194,14 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
     df = df_z.copy()
     
     df['score_css'] = (
-        0.30 * df['freq_z'] + 0.20 * df['growth_z'] + 0.20 * df['centrality_z'] +
-        0.15 * df['cross_platform_z'] + 0.15 * df['engagement_z']
+        0.25 * df['freq_z'] + 0.20 * df['engagement_z'] + 0.15 * df['sustainability_z'] +
+        0.20 * df['centrality_z'] + 0.10 * df['growth_z'] + 0.10 * df['cross_platform_z']
     ) * 100
 
+    # 💡 誤って削除していた「sustainability_z（継続性）」をEOSに25%の重みで復活！
     df['score_eos'] = (
-        0.30 * df['growth_z'] + 0.25 * df['novelty_z'] + 0.20 * df['bridge_z'] +
-        0.15 * df['conversion_z'] + 0.10 * df['cross_platform_z']
+        0.25 * df['growth_z'] + 0.25 * df['sustainability_z'] + 0.20 * df['novelty_z'] +
+        0.15 * df['bridge_z'] + 0.10 * df['conversion_z'] + 0.05 * df['cross_platform_z']
     ) * 100
 
     df['score_css'] = df['score_css'].clip(0, 100).round(1)
@@ -222,7 +223,6 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
         is_x_heavy = x_ratio > 0.7
         
-        # 💡 プラットフォームバイアスに応じた「投稿型」の出し分け
         if is_cross:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
