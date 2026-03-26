@@ -248,12 +248,12 @@ df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_no
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
 df_display['is_low_impact'] = df_display['engagement_raw'] < 5.0
-
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
-is_continuous = (df_display.get('sustainability_z', 0) >= 0.7) & (df_display.get('growth_z', 0) >= 0.5)
+
+is_continuous = (df_display['sustainability_z'] >= 0.7) & (df_display['growth_z'] >= 0.5)
 is_fully_saturated = df_display['novelty_z'] <= 0.05
 
 s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~is_fully_saturated) & is_high_score & (has_network | is_emerging | is_continuous) & ((~df_display.get('is_saturated', False)) | is_continuous)
@@ -280,17 +280,15 @@ def set_priority(row):
 
 df_display['priority'] = df_display.apply(set_priority, axis=1)
 
-# 💡 Aランクになった場合でも、スパイク語や飽和語は元々の「速報型」「解説型」等を優先し「保留」で塗りつぶさない
 def override_ctype(r):
     if r['priority'] == "👀 A (保留)":
-        if r.get('duration_hours', 1.0) < 1.0: return r['text_content_type']  # スパイクは速報等維持
-        if r.get('is_saturated', False): return r['text_content_type']        # 飽和は比較・解説等維持
-        return "保留" # 単なる惜しいAは保留
+        if r.get('duration_hours', 1.0) < 1.0: return r['text_content_type']  
+        if r.get('is_saturated', False): return r['text_content_type']        
+        return "保留"
     return r['text_content_type']
 
 df_display['text_content_type'] = df_display.apply(override_ctype, axis=1)
 
-# 💡 一覧表可視化：スパイク(一発バズ)であることを強調
 df_display['spike_penalty'] = is_spike.apply(lambda x: "作動(継続性不足)" if x else "なし")
 df_display['saturated_penalty'] = df_display.get('is_saturated', False).apply(lambda x: "作動(S昇格不可)" if x else "なし")
 
@@ -303,36 +301,49 @@ def enrich_card_data(row):
     css = row.get('score_css', 0)
     eos = row.get('score_eos', 0)
     x_ratio = row.get('x_ratio', 0.5)
+    cross = row.get('cross_platform_z', 0.0)
     
     is_spike_flag = duration < 1.0
     is_saturated_flag = row.get('is_saturated', False)
     is_fully_saturated_flag = novelty <= 0.05
     is_low_impact_flag = row.get('is_low_impact', False)
     is_continuous_flag = row.get('sustainability_z', 0) >= 0.7 and row.get('growth_z', 0) >= 0.5
+    
+    # 💡 媒体バイアスフラグ
+    is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
     is_x_heavy = x_ratio > 0.7
+    is_yt_heavy = x_ratio < 0.3
 
     if pri == "🔥 S (最優先)":
         action = "今すぐ" + original_ctype.replace('型', '投稿')
-        if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
+        if "先読み" in action: action = "今すぐ仕込み投稿"
+        if "初心者向け" in action: action = "今すぐ解説投稿"
         
-        if is_continuous_flag:
-            reason = "数日単位で安定して伸びており、一時的なスパイクではない継続上昇テーマ"
-        elif novelty >= 0.5:
-            reason = "新規性と成長率が高く、今すぐ先回りすべき本命テーマ"
+        # 💡 Sランク理由：媒体差(パターン7)を強力に反映
+        if is_cross:
+            reason = "複数媒体で注目が広がっており、今すぐ仕込む価値が高い本命テーマ"
+        elif is_yt_heavy:
+            reason = "YouTube等で継続視聴・検索需要が強く、じっくり深掘りする企画が有効"
         elif is_x_heavy:
             reason = "X(Twitter)で先行して反応が強く、速報・拡散狙いの仕込みが有効"
-        elif has_net:
-            reason = "関連テーマへの広がりが強く、独自の切り口で狙える優良候補"
+        elif is_continuous_flag:
+            reason = "数日単位で安定して伸びており、一時的なスパイクではない継続上昇テーマ"
         else:
-            reason = "反応が急増しており、継続監視しつつ先読みが効く注目テーマ"
+            reason = "新規性と成長率が高く、今すぐ先回りすべき本命テーマ"
         return action, reason
         
     elif pri == "👀 A (保留)":
-        # 💡 [最優先判定] Aランクの理由はスパイク(一発バズ)判定を最上位に置く
+        # 💡 Aランク：スパイク・飽和 > 媒体偏重 > その他
         if is_spike_flag:
             return "様子見", "一時的急騰による局地的反応のため、継続性不透明であり一旦様子見"
         elif is_fully_saturated_flag or is_saturated_flag:
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
+        
+        elif is_yt_heavy:
+            return "検索需要待ち", "YouTubeでの検索・継続視聴は見込めるが、全体の話題力・波及があと一歩不足"
+        elif is_x_heavy:
+            return "他媒体波及待ち", "Xで先行して反応が強いが、他媒体への波及はまだ限定的なため保留"
+            
         elif is_continuous_flag:
             return "準本命候補", "数日単位で継続上昇しているが、Sランク昇格には話題力や広がりがあと一歩不足"
         elif not has_net:
@@ -437,11 +448,12 @@ color_discrete_map = {
     "速報型": "#E64A19",     
     "反応まとめ型": "#F57C00", 
     "網羅まとめ型": "#43A047", 
-    "検証型": "#8E24AA",     
+    "初心者向け": "#8E24AA",     # 💡 修正
+    "検証型": "#8E24AA",
     "保留": "#9FA8DA",     
     "見送り": "#BDBDBD"    
 }
-category_orders = {"text_content_type": ["先読み型", "速報型", "解説型", "検証型", "比較型", "網羅まとめ型", "反応まとめ型", "まとめ型", "保留", "見送り"]}
+category_orders = {"text_content_type": ["先読み型", "速報型", "解説型", "初心者向け", "検証型", "比較型", "網羅まとめ型", "反応まとめ型", "まとめ型", "保留", "見送り"]}
 
 fig = px.scatter(
     df_display, x="score_css", y="score_eos", text="plot_label", size="freq_raw", color="text_content_type",
@@ -476,7 +488,7 @@ view_cols = {
     'sustainability_z': '継続性',
     'conversion_z': '広がり',
     'cross_platform_z': '媒体横断性', 
-    'spike_penalty': '短時間集中ペナルティ', # 💡 名称変更（一発バズ可視化）
+    'spike_penalty': '短時間集中ペナルティ', 
     'saturated_penalty': '飽和ペナルティ' 
 }
 
