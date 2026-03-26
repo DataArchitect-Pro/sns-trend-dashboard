@@ -109,7 +109,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
-    hist_db = get_historical_metrics(unique_tokens)
     features = []
     for w in passed_tokens:
         fx = word_platforms[w]['X']
@@ -228,21 +227,24 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         is_yt_heavy = x_ratio < 0.3
         is_x_heavy = x_ratio > 0.7
         
+        # [最優先判定] 短時間スパイク（一発バズ）
         if is_spike:
             if novelty >= 0.5: return "速報型", f"【速報】話題急騰中の「{kw}」まとめ"
             else: return "反応まとめ型", f"【局地的バズ】「{kw}」に対するみんなの反応"
 
-        if is_saturated and not is_continuous:
+        # 💡 【重要】飽和した巨大ワードは「比較」「解説」「まとめ」「反応まとめ」に完全固定（速報や先読みは不可）
+        if is_saturated:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif is_yt_heavy or row['conversion_z'] >= 0.2: return "解説型", f"【最新版】「{kw}」の活用法まとめ"
+            elif is_cross: return "まとめ型", f"【完全網羅】今さら聞けない「{kw}」全情報"
             else: return "反応まとめ型", f"【みんなの反応】「{kw}」に対する活用事例"
             
+        # 未飽和語の通常分岐
         if is_cross:
             if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
             elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
             else: return "網羅まとめ型", f"【完全網羅】話題の「{kw}」に関する全情報"
         elif is_x_heavy:
-            # 💡 修正: 新規性が高い場合は「速報」ではなく「先読み・解説」に寄せ、実用的な投稿型を提案
             if novelty >= 0.5: return "先読み型", f"【次に来る】Xで密かに話題の「{kw}」とは？"
             elif is_continuous: return "解説型", f"【解説】Xでじわじわ伸びている「{kw}」について"
             else: return "反応まとめ型", f"【Xで話題】「{kw}」に対するみんなの反応"
