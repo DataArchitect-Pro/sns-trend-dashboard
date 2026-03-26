@@ -212,16 +212,15 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
     df['is_high_css'] = df['score_css'] >= 40
     df['is_high_eos'] = df['score_eos'] >= 50
     df['is_saturated'] = df['novelty_z'] < 0.3
-    df['is_fully_saturated'] = df['novelty_z'] <= 0.05 
-    df['is_continuous'] = (df['sustainability_z'] >= 0.7) & (df['growth_z'] >= 0.5)
 
     def generate_text(row):
         kw = row['token']
         x_ratio = row.get('x_ratio', 0.5)
         cross = row.get('cross_platform_z', 0.0)
         is_saturated = row.get('is_saturated', False)
-        is_continuous = row.get('is_continuous', False)
+        is_continuous = row.get('sustainability_z', 0.0) >= 0.7 and row.get('growth_z', 0.0) >= 0.5
         is_spike = row.get('duration_hours', 1.0) < 1.0 
+        novelty = row.get('novelty_z', 0.0)
 
         if kw in MAGIC_WORDS: return "見送り", ""
         
@@ -230,7 +229,7 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
         is_x_heavy = x_ratio > 0.7
         
         if is_spike:
-            if row.get('novelty_z', 0) >= 0.5: return "速報型", f"【速報】話題急騰中の「{kw}」まとめ"
+            if novelty >= 0.5: return "速報型", f"【速報】話題急騰中の「{kw}」まとめ"
             else: return "反応まとめ型", f"【局地的バズ】「{kw}」に対するみんなの反応"
 
         if is_saturated and not is_continuous:
@@ -243,7 +242,9 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
             elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
             else: return "網羅まとめ型", f"【完全網羅】話題の「{kw}」に関する全情報"
         elif is_x_heavy:
-            if row['novelty_z'] >= 0.5 or is_continuous: return "速報型", f"【速報】Xで話題沸騰中の「{kw}」とは？"
+            # 💡 修正: 新規性が高い場合は「速報」ではなく「先読み・解説」に寄せ、実用的な投稿型を提案
+            if novelty >= 0.5: return "先読み型", f"【次に来る】Xで密かに話題の「{kw}」とは？"
+            elif is_continuous: return "解説型", f"【解説】Xでじわじわ伸びている「{kw}」について"
             else: return "反応まとめ型", f"【Xで話題】「{kw}」に対するみんなの反応"
         elif is_yt_heavy:
             if row['conversion_z'] >= 0.2 or row['is_high_css']: return "解説型", f"【分かりやすく解説】「{kw}」の基本と使い方"
