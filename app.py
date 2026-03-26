@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from logic import run_pipeline
+from logic import run_pipeline, MAGIC_WORDS
 
 st.set_page_config(page_title="SNS Trend Analyzer", layout="wide", initial_sidebar_state="expanded")
 
@@ -247,16 +247,25 @@ if df.empty:
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
+# 💡 影響力足切り
 df_display['is_low_impact'] = df_display['engagement_raw'] < 5.0
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
+
+# 💡 一般性・抽象度ペナルティ（テーマ粒度でのC落下を促す）
+# MAGIC_WORDSに含まれるか、文字数が2以下でネットワーク(広がり)が皆無の単語は抽象度が高いとみなす
+df_display['is_abstract'] = df_display['token'].isin(MAGIC_WORDS) | ((df_display['token'].str.len() <= 2) & (~has_network))
+# 単発の反応に留まっており、関連テーマとしての広がりが弱いものはテーマ粒度で足切り
+df_display['is_weak_theme'] = (df_display['score_css'] < 35) & (~has_network)
+
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
-is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
-
 is_continuous = (df_display['sustainability_z'] >= 0.7) & (df_display['growth_z'] >= 0.5)
+
+# 💡 S昇格条件の厳格化：単に時間が経った未飽和語が上がらないよう、最低限のCSS(35以上)を要求
+is_high_score = ((df_display['score_eos'] >= 50) & (df_display['score_css'] >= 35)) | (df_display['score_css'] >= 55)
 is_fully_saturated = df_display['novelty_z'] <= 0.05
 
-s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~is_fully_saturated) & is_high_score & (has_network | is_emerging | is_continuous) & ((~df_display.get('is_saturated', False)) | is_continuous)
+s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~is_fully_saturated) & (~df_display['is_abstract']) & (~df_display['is_weak_theme']) & is_high_score & (has_network | is_emerging | is_continuous) & ((~df_display.get('is_saturated', False)) | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 top3_indices = s_candidates.head(3).index
@@ -267,7 +276,9 @@ if len(top3_indices) > 1: df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
 if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 
 def set_priority(row):
-    if row['is_low_impact']:
+    if row['token'] in MAGIC_WORDS:
+        return "➖ C (見送り)"
+    if row['is_low_impact'] or row.get('is_abstract', False) or row.get('is_weak_theme', False):
         return "➖ C (見送り)"
         
     if row['Rank_Num'] != "": 
@@ -281,6 +292,8 @@ def set_priority(row):
 df_display['priority'] = df_display.apply(set_priority, axis=1)
 
 def override_ctype(r):
+    if r['priority'] == "➖ C (見送り)":
+        return "見送り"
     if r['priority'] == "👀 A (保留)":
         if r.get('duration_hours', 1.0) < 1.0: return r['text_content_type']  
         if r.get('is_saturated', False): return r['text_content_type']        
@@ -308,19 +321,22 @@ def enrich_card_data(row):
     is_fully_saturated_flag = novelty <= 0.05
     is_low_impact_flag = row.get('is_low_impact', False)
     is_continuous_flag = row.get('sustainability_z', 0) >= 0.7 and row.get('growth_z', 0) >= 0.5
+    is_abstract_flag = row.get('is_abstract', False)
+    is_weak_theme_flag = row.get('is_weak_theme', False)
     
-    # 💡 媒体バイアスフラグ
     is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
     is_x_heavy = x_ratio > 0.7
     is_yt_heavy = x_ratio < 0.3
 
     if pri == "🔥 S (最優先)":
         action = "今すぐ" + original_ctype.replace('型', '投稿')
-        if "先読み" in action: action = "今すぐ仕込み投稿"
-        if "初心者向け" in action: action = "今すぐ解説投稿"
+        if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
+        if action == "今すぐ初心者向け投稿": action = "今すぐ解説投稿"
         
-        # 💡 Sランク理由：媒体差(パターン7)を強力に反映
-        if is_cross:
+        # 💡 S寄りA、A寄りSの境界文言を細分化
+        if css < 40:
+            reason = "話題力は発展途上だが、ポテンシャルが極めて高く今のうちに先回りすべき本命テーマ"
+        elif is_cross:
             reason = "複数媒体で注目が広がっており、今すぐ仕込む価値が高い本命テーマ"
         elif is_yt_heavy:
             reason = "YouTube等で継続視聴・検索需要が強く、じっくり深掘りする企画が有効"
@@ -333,17 +349,19 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        # 💡 Aランク：スパイク・飽和 > 媒体偏重 > その他
         if is_spike_flag:
             return "様子見", "一時的急騰による局地的反応のため、継続性不透明であり一旦様子見"
         elif is_fully_saturated_flag or is_saturated_flag:
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
         
+        # 💡 ポテンシャルが極めて高いがSから漏れたものを「S寄りA」として評価
+        elif eos >= 55 and has_net:
+            return "準本命候補", "注目候補でありポテンシャルは高いが、最優先で着手するには話題力や継続性があと一歩不足"
+        
         elif is_yt_heavy:
             return "検索需要待ち", "YouTubeでの検索・継続視聴は見込めるが、全体の話題力・波及があと一歩不足"
         elif is_x_heavy:
             return "他媒体波及待ち", "Xで先行して反応が強いが、他媒体への波及はまだ限定的なため保留"
-            
         elif is_continuous_flag:
             return "準本命候補", "数日単位で継続上昇しているが、Sランク昇格には話題力や広がりがあと一歩不足"
         elif not has_net:
@@ -352,7 +370,12 @@ def enrich_card_data(row):
             return "監視継続", "注目候補ではあるが、観測期間や投稿数が少なくSランク昇格には届いていない"
             
     else: 
-        if is_low_impact_flag:
+        # 💡 Cの理由文をテーマ粒度（独立性の弱さや抽象度の高さ）で説明
+        if row['token'] in MAGIC_WORDS or (is_abstract_flag):
+            return "今回は見送り", "一般性・抽象度が高く、特定の投稿テーマとして成立しづらいため見送り"
+        elif is_weak_theme_flag:
+            return "今回は見送り", "単発の反応に留まっており、関連テーマとしての広がり・独立性が弱いため見送り"
+        elif is_low_impact_flag:
             return "今回は見送り", "平均的な反応が著しく低く、トレンドとしての影響力が不足しているため見送り"
         elif is_spike_flag:
             return "今回は見送り", "反応が弱く、継続性もない単発の投稿のため今回は見送り"
@@ -413,8 +436,8 @@ if count_s == 0:
             msg = "短期間での一時的急騰（局地的反応）は確認されましたが、継続性不透明のため「様子見」と判定しました。"
         elif any("後追いリスク" in r for r in a_reasons):
             msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
-        elif any("継続上昇" in r for r in a_reasons):
-            msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
+        elif any("準本命候補" in r for r in a_reasons):
+            msg = "ポテンシャルの高い準本命候補は抽出されましたが、最優先で着手すべき話題力にはあと一歩届かず、「保留」判定となりました。"
         else:
             msg = "注目候補は抽出されましたが、最優先で着手すべき基準には届かず、「保留」判定となりました。"
     else:
@@ -448,7 +471,7 @@ color_discrete_map = {
     "速報型": "#E64A19",     
     "反応まとめ型": "#F57C00", 
     "網羅まとめ型": "#43A047", 
-    "初心者向け": "#8E24AA",     # 💡 修正
+    "初心者向け": "#8E24AA",     
     "検証型": "#8E24AA",
     "保留": "#9FA8DA",     
     "見送り": "#BDBDBD"    
