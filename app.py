@@ -21,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意
+# 2. サンプルデータの用意 (省略せずに記載)
 # ==========================================
 SAMPLE_CSV = """text,posted_at,platform,eng,id
 次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
@@ -250,9 +250,10 @@ df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
-is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
 
-s_condition = (~is_spike) & is_high_score & (has_network | is_emerging)
+# 💡 Sランクの厳格化：単にスコアが高いだけでなく、最低限のEOSポテンシャル（45以上）を要求
+is_s_worthy = (df_display['score_eos'] >= 45)
+s_condition = (~is_spike) & is_s_worthy & (has_network | is_emerging)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 
@@ -266,6 +267,7 @@ if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 def set_priority(row):
     if row['Rank_Num'] != "": 
         return "🔥 S (最優先)"
+    # Sから漏れた巨大語（ChatGPTなど）はAに落ちる
     if row['score_css'] >= 45 or row['score_eos'] >= 45 or row['engagement_z'] >= 0.7 or row['freq_z'] >= 0.7: 
         return "👀 A (保留)"
     return "➖ C (見送り)"
@@ -285,7 +287,6 @@ def enrich_card_data(row):
     has_net = (row.get('conversion_z', 0) > 0) or (row.get('bridge_z', 0) > 0)
     
     if pri == "🔥 S (最優先)":
-        # 💡 過度な形容詞「圧倒的」を削除し、客観的でフラットなトーンに調整
         if rank == "①": reason = "成長率と新規性が高く、今すぐ先回りすべき本命"
         elif rank == "②": reason = "関連テーマへの広がりが強く、独自の切り口で狙える"
         else: reason = "反応が急増しており、継続監視しつつ先読みが効く"
@@ -298,8 +299,11 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
+        # 💡 パターン2(飽和語)向けのアクションと理由の分岐
         if duration < 1.0:
             return "様子見", "短期間の局地的な反応（スパイク）のため、継続するか様子見"
+        elif row['novelty_z'] < 0.3 and row['score_css'] >= 50:
+            return "後追い注意", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
         elif not has_net:
             return "監視継続", "反応や新規性はあるが、関連テーマへの広がりが弱く今すぐ仕込むには根拠不足"
         else:
@@ -432,7 +436,6 @@ view_cols = {
     'conversion_z': '広がり'
 }
 
-# 💡 常に一覧表を表示し、詳細な内部スコアを提供する
 st.dataframe(
     df_display[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
