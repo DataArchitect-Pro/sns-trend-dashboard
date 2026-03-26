@@ -21,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意
+# 2. サンプルデータの用意 (省略せずに記載)
 # ==========================================
 SAMPLE_CSV = """text,posted_at,platform,eng,id
 次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
@@ -284,25 +284,37 @@ df_display['text_content_type'] = df_display.apply(
 )
 
 def enrich_card_data(row):
+    original_ctype = row['text_content_type']
     pri = row['priority']
     duration = row.get('duration_hours', 0)
     has_net = (row.get('conversion_z', 0) > 0) or (row.get('bridge_z', 0) > 0)
     novelty = row.get('novelty_z', 0)
     css = row.get('score_css', 0)
     eos = row.get('score_eos', 0)
+    x_ratio = row.get('x_ratio', 0.5)
+    cross = row.get('cross_platform_z', 0.0)
     
     is_spike_flag = duration < 1.0
     is_saturated_flag = (novelty < 0.3) and (css >= 50)
     is_low_impact_flag = row.get('is_low_impact', False)
+    
+    is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
+    is_x_heavy = x_ratio > 0.7
+    is_yt_heavy = x_ratio < 0.3
 
     if pri == "🔥 S (最優先)":
-        action = "今すぐ" + row['text_content_type'].replace('型', '投稿')
+        action = "今すぐ" + original_ctype.replace('型', '投稿')
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         
-        if novelty >= 0.5:
-            reason = "新規性と成長率が高く、今すぐ先回りすべき本命テーマ"
+        # 💡 Sランクの理由文を媒体特性（プラットフォームバイアス）で出し分け
+        if is_x_heavy:
+            reason = "X(Twitter)で先行して反応が強く、速報・拡散狙いの仕込みが有効"
+        elif is_yt_heavy:
+            reason = "YouTube等で検索・解説需要が強く、じっくり深掘りする企画が有効"
+        elif novelty >= 0.5:
+            reason = "新規性が高く媒体横断で注目が広がっている、全方位で狙うべき本命テーマ"
         elif has_net:
-            reason = "関連テーマへの広がりが強く、独自の切り口で狙える優良候補"
+            reason = "媒体横断で関連テーマへの広がりが強く、独自の切り口で狙える優良候補"
         else:
             reason = "反応が急増しており、継続監視しつつ先読みが効く注目テーマ"
         return action, reason
@@ -409,10 +421,14 @@ color_discrete_map = {
     "解説型": "#0288D1",   
     "比較型": "#0097A7",   
     "まとめ型": "#388E3C", 
+    "速報型": "#E64A19",     # 💡 新規追加: X特化
+    "反応まとめ型": "#F57C00", # 💡 新規追加: X特化
+    "網羅まとめ型": "#43A047", # 💡 新規追加: 媒体横断
+    "検証型": "#8E24AA",     # 💡 新規追加: YT特化
     "保留": "#9FA8DA",     
     "見送り": "#BDBDBD"    
 }
-category_orders = {"text_content_type": ["先読み型", "解説型", "比較型", "まとめ型", "保留", "見送り"]}
+category_orders = {"text_content_type": ["先読み型", "速報型", "解説型", "検証型", "比較型", "網羅まとめ型", "反応まとめ型", "まとめ型", "保留", "見送り"]}
 
 fig = px.scatter(
     df_display, x="score_css", y="score_eos", text="plot_label", size="freq_raw", color="text_content_type",
@@ -453,10 +469,11 @@ st.dataframe(
     use_container_width=True, hide_index=True
 )
 
+# 💡 解説テキストをプラットフォーム対応版にアップデート
 with st.expander("💡 投稿型の意味と使い分け", expanded=False):
     st.markdown("""
-    * **先読み型:** まだ競争が浅く、これから伸びるテーマ。いち早く発信することで第一人者ポジションを狙えます。
-    * **解説型:** 今話題になり始めているテーマ。検索需要に応える図解や基本解説が刺さります。
-    * **比較型:** 関連語との結びつきが強いテーマ。「AとBの違い」「どっちを選ぶべきか」のコンテンツが有効です。
-    * **まとめ型:** すでに巨大なバズになっているテーマ。事例やみんなの反応をまとめた保存用のコンテンツが適しています。
+    * **先読み型 (媒体横断):** まだ競争が浅く、これから伸びるテーマ。いち早く発信することで第一人者ポジションを狙えます。
+    * **比較・網羅まとめ型 (媒体横断):** 関連語との結びつきが強いテーマ。「AとBの違い」や全体像の網羅が有効です。
+    * **速報・反応まとめ型 (X特化):** X(Twitter)で先行してバズっているテーマ。瞬発力のある情報提供や共感狙いが刺さります。
+    * **解説・検証型 (YouTube特化):** 検索需要や継続視聴が見込めるテーマ。図解や基本解説、実際に試してみる企画が適しています。
     """)
