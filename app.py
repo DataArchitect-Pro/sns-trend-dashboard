@@ -21,28 +21,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意 (省略)
-# ==========================================
-SAMPLE_CSV = """text,posted_at,platform,eng,id
-次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
-NanoBananaの始め方を初心者向けに解説します。,2023-10-01 10:15:00,YouTube,80,A02
-画像生成AIのNanoBanana、プロンプトのコツと始め方。,2023-10-01 10:30:00,X,60,A03
-画像生成AIのNanoBananaとは？他のAIとの違いを比較してみた。,2023-10-01 11:00:00,YouTube,120,A04
-PythonとJavaScriptの違いを徹底比較！どっちを学ぶべき？,2023-10-01 11:30:00,YouTube,300,B01
-初心者におすすめなのはPython？JavaScript？違いを解説。,2023-10-01 12:00:00,X,150,B02
-Web開発ならJavaScript、AIならPython。それぞれのメリットを比較。,2023-10-01 12:30:00,X,180,B03
-Pythonの学習ロードマップまとめ。初心者必見！,2023-10-01 13:00:00,YouTube,400,B04
-今期の覇権アニメ、神作画すぎた。みんなの反応まとめ。,2023-10-01 13:30:00,X,1500,C01
-覇権アニメ第8話の伏線考察まとめ！,2023-10-01 14:00:00,YouTube,2500,C02
-覇権アニメの最新話、海外の反応まとめ動画です。,2023-10-01 14:30:00,YouTube,3000,C03
-覇権アニメ、なぜここまで人気なのか？海外の反応と理由を解説。,2023-10-01 15:00:00,X,1200,C04
-アマギフプレゼント！フォローとRTをお願いします！,2023-10-01 15:30:00,X,0,E01
-抽選で最新ゲーム機プレゼント！RTとフォロー必須！,2023-10-01 16:00:00,X,0,E02
-今日の仕事疲れたー。早く帰宅したい。,2023-10-01 16:30:00,X,5,F01
-仕事終わらない。明日も仕事だ。,2023-10-01 17:00:00,X,2,F02
-"""
-
-# ==========================================
 # 3. サイドバー
 # ==========================================
 with st.sidebar:
@@ -52,14 +30,6 @@ with st.sidebar:
     uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
     st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
     
-    st.download_button(
-        label="📥 サンプルCSVをダウンロード",
-        data=SAMPLE_CSV,
-        file_name="sample_sns_data.csv",
-        mime="text/csv",
-        help="フォーマットの確認や、お試し分析にご利用ください。"
-    )
-
     st.divider()
 
     st.header("STEP 2: 分析設定")
@@ -189,30 +159,6 @@ if df.empty:
 
         st.error(f"**🔍 最も可能性が高い原因：{main_cause}**\n\nそのため、{detail}")
         
-        suggested_min_freq = max(1, min_freq - 1)
-        
-        st.markdown(f"""
-        <div style="margin-top: 16px; margin-bottom: 8px; font-weight: bold; color: #1976d2;">💡 推奨されるアクション</div>
-        <div style="background-color: #f0f7ff; border: 2px solid #90caf9; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-            <span style="font-size: 1.05em; font-weight: bold; color: #1565c0;">1. 最低出現回数を下げる</span><br>
-            <span style="color: #333; font-size: 0.95em;">左サイドバーの設定を <b>{min_freq} → {suggested_min_freq}</b> に変更して再実行してください。</span>
-        </div>
-        <div style="margin-left: 8px; color: #333; font-size: 0.95em; line-height: 1.8;">
-            <div style="margin-bottom: 8px;"><b>2. より投稿数が多く、具体的な本文を含むCSVに差し替える</b></div>
-            <div><b>3. 必要に応じて「ノイズ・スパム判定語を表示する」をONにして除外内容を確認する</b></div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.write("")
-        st.markdown("**▼ 正常に分析できるCSV例を試す**")
-        st.download_button(
-            label="📥 サンプルCSVで動作を確認する",
-            data=SAMPLE_CSV,
-            file_name="sample_sns_data.csv",
-            mime="text/csv",
-            help="フォーマットの確認や、お試し分析にご利用ください。"
-        )
-        
     with col_err_right:
         total_posts = len(df_raw)
         platforms = df_raw['platform'].value_counts()
@@ -232,10 +178,8 @@ if df.empty:
             <span style="color: #777; font-size: 0.85em; margin-left: 12px;">有効投稿数：<b style="color: #333;">{valid_posts}件</b></span><br><br>
             <span style="color: #555;">抽出された候補語数：</span> <b style="font-size: 1.1em;">{extracted}件</b><br>
             <span style="color: #555;">しきい値を通過した語数：</span> <b style="color: #d32f2f; font-size: 1.2em;">{passed}件</b><br><br>
-            <hr style="margin: 12px 0; border: none; border-top: 1px dashed #ccc;">
             <strong style="color: #555; font-size: 0.95em;">⚙️ 現在の設定値</strong><br>
             <span style="color: #333; font-size: 0.95em;">最低出現回数： <b style="font-size: 1.1em; color: #1976d2;">{min_freq}</b></span><br>
-            <span style="color: #666; font-size: 0.9em;">ノイズ判定語表示： <b>{'ON' if show_noise else 'OFF'}</b></span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -258,9 +202,10 @@ is_spike = df_display['duration_hours'] < 1.0
 is_continuous = (df_display['sustainability_z'] >= 0.7) & (df_display['growth_z'] >= 0.5)
 
 is_high_score = ((df_display['score_eos'] >= 50) & (df_display['score_css'] >= 35)) | (df_display['score_css'] >= 55)
-is_fully_saturated = df_display['novelty_z'] <= 0.05
 
-s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~is_fully_saturated) & (~df_display['is_abstract']) & (~df_display['is_weak_theme']) & is_high_score & (has_network | is_emerging | is_continuous) & ((~df_display.get('is_saturated', False)) | is_continuous)
+# 💡 飽和語はS昇格への道を完全に遮断する (is_continuous等での特例バイパスを許可しない)
+is_saturated = df_display.get('is_saturated', False)
+s_condition = (~is_spike) & (~df_display['is_low_impact']) & (~is_abstract) & (~df_display['is_weak_theme']) & (~is_saturated) & is_high_score & (has_network | is_emerging | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 top3_indices = s_candidates.head(3).index
@@ -313,7 +258,6 @@ def enrich_card_data(row):
     
     is_spike_flag = duration < 1.0
     is_saturated_flag = row.get('is_saturated', False)
-    is_fully_saturated_flag = novelty <= 0.05
     is_low_impact_flag = row.get('is_low_impact', False)
     is_continuous_flag = row.get('sustainability_z', 0) >= 0.7 and row.get('growth_z', 0) >= 0.5
     is_abstract_flag = row.get('is_abstract', False)
@@ -328,7 +272,6 @@ def enrich_card_data(row):
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         if action == "今すぐ初心者向け投稿": action = "今すぐ解説投稿"
         
-        # 💡 Sランク理由の厳密な優先順位づけ (新規性・競争の浅さを最重視)
         if css < 40:
             reason = "話題力は発展途上だが、ポテンシャルが極めて高く今のうちに先回りすべき本命テーマ"
         elif novelty >= 0.5:
@@ -351,10 +294,11 @@ def enrich_card_data(row):
         return action, reason
         
     elif pri == "👀 A (保留)":
-        if is_spike_flag:
+        # 💡 [最優先] 飽和語は継続上昇していても「後追い注意」として確実にブロック理由を出す
+        if is_saturated_flag:
+            return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには優位性が低く後追いリスクが高い"
+        elif is_spike_flag:
             return "様子見", "一時的急騰による局地的反応のため、継続性不透明であり一旦様子見"
-        elif is_fully_saturated_flag or is_saturated_flag:
-            return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには後追いリスクが高い"
         
         elif eos >= 55 and has_net:
             return "準本命候補", "注目候補でありポテンシャルは高いが、最優先で着手するには話題力や継続性があと一歩不足"
@@ -432,12 +376,12 @@ st.markdown(f"""
 if count_s == 0:
     if count_a > 0:
         a_reasons = df_display[df_display['priority'] == "👀 A (保留)"]['reason'].tolist()
-        if any("一時的急騰" in r for r in a_reasons):
+        if any("後追いリスク" in r for r in a_reasons):
+            msg = "話題力は高いものの、既に認知が広く競争が激しいため、後追いリスクを考慮して「保留」判定としました。"
+        elif any("一時的急騰" in r for r in a_reasons):
             msg = "短期間での一時的急騰（局地的反応）は確認されましたが、継続性不透明のため「様子見」と判定しました。"
-        elif any("後追いリスク" in r for r in a_reasons):
-            msg = "話題力は非常に高いものの、既に競争が激しく後追いリスクが高いため「保留」判定となりました。"
-        elif any("準本命候補" in r for r in a_reasons):
-            msg = "ポテンシャルの高い準本命候補は抽出されましたが、最優先で着手すべき話題力にはあと一歩届かず、「保留」判定となりました。"
+        elif any("継続上昇" in r for r in a_reasons):
+            msg = "数日単位での安定成長（継続上昇）は確認されましたが、最優先で着手すべき基準にはあと一歩届かず、「保留」判定となりました。"
         else:
             msg = "注目候補は抽出されましたが、最優先で着手すべき基準には届かず、「保留」判定となりました。"
     else:
