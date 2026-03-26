@@ -66,15 +66,22 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             pair_counts[(w1, w2)] += 1
 
     unique_tokens = list(word_counts.keys())
-    # 設定された最低出現回数（min_freq）で足切り
     passed_tokens = [w for w in unique_tokens if word_counts[w] >= min_freq]
     
-    # 失敗画面UIに渡すためのメタデータを作成
+    # 💡 どこで分析が止まったか（不通過理由）を動的に判定
+    if len(unique_tokens) == 0:
+        drop_reason = "有効な固有トピック（名詞）が抽出できませんでした"
+    elif len(passed_tokens) == 0:
+        drop_reason = f"出現回数不足（最低 {min_freq} 回以上出現した語が0件でした）"
+    else:
+        drop_reason = "単語同士の関連性（共起ネットワーク）が基準に満ちませんでした"
+
     metadata = {
         "valid_posts_count": valid_posts_count,
         "spam_dropped_count": len(df_raw) - valid_posts_count,
         "extracted_words_count": len(unique_tokens),
         "passed_words_count": len(passed_tokens),
+        "drop_reason": drop_reason
     }
 
     if not passed_tokens:
@@ -203,7 +210,6 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
 def run_pipeline(df_raw: pd.DataFrame, min_freq: int = 3) -> tuple[pd.DataFrame, dict]:
     if df_raw.empty:
         return pd.DataFrame(), {}
-    # min_freqを引数として渡し、メタデータも受け取る
     df_features, metadata = compute_network_and_features(df_raw, min_freq)
     if df_features.empty:
         return pd.DataFrame(), metadata
