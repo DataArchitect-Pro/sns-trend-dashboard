@@ -16,12 +16,6 @@ STOP_WORDS = {
 }
 MAGIC_WORDS = {'とは', '違い', 'おすすめ', '比較', '理由', 'メリット', 'デメリット', 'やり方', '始め方', '初心者', '解説', 'まとめ'}
 
-def get_historical_metrics(tokens: list) -> dict:
-    hist = {}
-    for t in tokens:
-        hist[t] = {'freq_past': 0, 'freq_14d': 0, 'days_7d': 1, 'days_30d': 1}
-    return hist
-
 def extract_tokens(text: str) -> list:
     tokens = []
     current_compound = ""
@@ -39,10 +33,15 @@ def extract_tokens(text: str) -> list:
     return list(set(tokens))
 
 def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[pd.DataFrame, dict]:
+    # 💡 日時データをパース
+    if 'posted_at' in df_raw.columns:
+        df_raw['posted_at'] = pd.to_datetime(df_raw['posted_at'], errors='coerce')
+    
     word_counts = defaultdict(int)
     pair_counts = defaultdict(int)
     word_eng = defaultdict(int)
     word_platforms = defaultdict(lambda: {'X': 0, 'YouTube': 0})
+    word_timestamps = defaultdict(list) # 💡 単語ごとの出現時刻を記録
     
     spam_pattern = re.compile(r'アマギフ|プレゼント|フォロー|RT|抽選')
     valid_posts_count = 0
@@ -55,12 +54,15 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
         valid_posts_count += 1
         eng_score = row.get('eng', 0)
         platform = row.get('platform', 'X')
+        posted_at = row.get('posted_at')
         
         tokens = extract_tokens(text)
         for w in tokens:
             word_counts[w] += 1
             word_eng[w] += eng_score
             word_platforms[w][platform] += 1
+            if pd.notnull(posted_at):
+                word_timestamps[w].append(posted_at)
             
         for w1, w2 in combinations(sorted(tokens), 2):
             pair_counts[(w1, w2)] += 1
@@ -104,8 +106,6 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
     betweenness = nx.betweenness_centrality(G, k=k_val, weight='distance') if len(G) > 0 else {}
     degree_centrality = {node: sum(data['weight'] for _, _, data in G.edges(node, data=True)) for node in G.nodes}
 
-    hist_db = get_historical_metrics(unique_tokens)
-
     features = []
     for w in passed_tokens:
         fx = word_platforms[w]['X']
@@ -117,22 +117,26 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             if G.has_edge(w, mw):
                 max_conversion = max(max_conversion, G[w][mw]['weight'])
                 
-        hist = hist_db.get(w, {})
-        freq_past = hist.get('freq_past', 0)
-        freq_14d = hist.get('freq_14d', 0)
+        # 💡 真のSustainability（継続性）とSpike（スパイク）の計算
+        timestamps = word_timestamps[w]
+        duration_hours = 0.0
+        if len(timestamps) > 1:
+            duration_hours = (max(timestamps) - min(timestamps)).total_seconds() / 3600.0
+            
+        # 継続時間は最大12時間で1.0(満点)とする
+        sustainability_raw = min(1.0, duration_hours / 12.0) if duration_hours > 0 else 0.0
         
         features.append({
             'token': w,
             'freq_raw': word_counts[w],
-            'growth_raw': (word_counts[w] + 5) / (freq_past + 5),
+            'growth_raw': word_counts[w], # 過去データがない場合は現在の頻度をベースにする
             'centrality_raw': degree_centrality.get(w, 0.0),
             'engagement_raw': word_eng[w] / max(1, word_counts[w]),
             'bridge_raw': betweenness.get(w, 0.0),
             'cross_platform_raw': cross_platform_raw,
-            'sustainability_raw': hist.get('days_7d', 1) / 7.0,
-            'noise_risk_raw': hist.get('days_30d', 1) / 30.0,
-            'novelty_raw': max(0.0, 1.0 - (freq_14d / 100.0)),
-            'conversion_raw': max_conversion
+            'sustainability_raw': sustainability_raw,
+            'conversion_raw': max_conversion,
+            'duration_hours': duration_hours # UI判定用に保持
         })
         
     return pd.DataFrame(features), metadata
@@ -149,7 +153,6 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
     
     for col in target_cols:
         vals = df[[col]].fillna(0).values
-        # 💡 バグ修正: 単語数が1件だけで偏差値が計算できない場合でも、絶対値があればハイスコア(1.0)を与える
         if len(vals) == 1:
             scaled = np.array([1.0]) if vals[0][0] > 0 else np.array([0.0])
             df[col.replace('_raw', '_z').replace('_log', '_z')] = scaled
@@ -171,7 +174,7 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
         else:
             df['bridge_z'] = minmax.fit_transform(bridge_vals).flatten()
     
-    for col in ['cross_platform', 'sustainability', 'noise_risk', 'novelty', 'conversion']:
+    for col in ['cross_platform', 'sustainability', 'conversion']:
         df[f'{col}_z'] = df[f'{col}_raw'].fillna(0).clip(0, 1)
         
     return df
@@ -179,16 +182,19 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
 def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
     if df_z.empty: return df_z
     df = df_z.copy()
+    
+    # 💡 継続性(Sustainability)の重みを高め、短期スパイクへのペナルティを強化
     df['score_css'] = (
-        0.32 * df['freq_z'] + 0.20 * df['growth_z'] + 0.18 * df['centrality_z'] +
-        0.15 * df['cross_platform_z'] + 0.10 * df['engagement_z'] + 
-        0.05 * df['sustainability_z'] - 0.10 * df['noise_risk_z']
+        0.30 * df['freq_z'] + 0.15 * df['growth_z'] + 0.15 * df['centrality_z'] +
+        0.15 * df['cross_platform_z'] + 0.15 * df['engagement_z'] + 
+        0.10 * df['sustainability_z']
     ) * 100
 
+    # EOS(ポテンシャル)は「時間的な継続性」がないと高くならないように設計
     df['score_eos'] = (
-        0.26 * df['growth_z'] + 0.22 * df['novelty_z'] + 0.18 * df['bridge_z'] +
-        0.16 * df['conversion_z'] + 0.10 * df['sustainability_z'] +
-        0.08 * df['cross_platform_z'] + 0.05 * df['freq_z'] - 0.15 * df['noise_risk_z']
+        0.20 * df['growth_z'] + 0.20 * df['bridge_z'] +
+        0.20 * df['conversion_z'] + 0.30 * df['sustainability_z'] +
+        0.10 * df['cross_platform_z']
     ) * 100
 
     df['score_css'] = df['score_css'].clip(0, 100).round(1)
@@ -197,26 +203,21 @@ def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
 
 def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
-    df['is_noise'] = df['noise_risk_z'] >= 0.8
-    df['is_high_css'] = (df['score_css'] >= 40) & (~df['is_noise']) 
-    df['is_high_eos'] = (df['score_eos'] >= 50) & (~df['is_noise'])
-    df['is_explainer'] = df['conversion_z'] >= 0.3
-    df['is_comparative'] = df['bridge_z'] >= 0.3
+    df['is_high_css'] = df['score_css'] >= 40
+    df['is_high_eos'] = df['score_eos'] >= 50
 
     def generate_text(row):
         kw = row['token']
-        if row['is_noise'] or kw in MAGIC_WORDS:
+        if kw in MAGIC_WORDS:
             return "見送り", ""
-        if row['is_comparative']:
+        if row['bridge_z'] >= 0.3:
             return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
-        elif row['is_high_css'] and row['is_explainer']:
+        elif row['is_high_css'] and row['conversion_z'] >= 0.3:
             return "解説型", f"【急上昇】今さら聞けない「{kw}」とは？"
-        elif row['is_high_eos'] and row['novelty_z'] >= 0.5:
+        elif row['is_high_eos']:
             return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
         elif row['is_high_css']:
             return "まとめ型", f"【まとめ】バズり中の「{kw}」、みんなの反応"
-        elif row['is_high_eos']:
-            return "注目型", f"【注目】局地的に話題の「{kw}」をチェック"
         return "見送り", ""
 
     df[['text_content_type', 'text_title_seed']] = df.apply(lambda r: pd.Series(generate_text(r)), axis=1)
