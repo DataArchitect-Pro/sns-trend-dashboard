@@ -10,7 +10,6 @@ from janome.tokenizer import Tokenizer
 
 tokenizer = Tokenizer()
 
-# 💡 一般語・意味薄語のストップワードを実務レベルに超拡張
 STOP_WORDS = {
     'こと', 'もの', 'これ', 'それ', 'あれ', '今日', '明日', '昨日', 'さん', 'ちゃん', 'くん', 
     'ため', 'よう', 'ところ', 'マジ', 'の', 'ん', 'お願い', '動画', '最新', '話', 'みんな', 
@@ -31,12 +30,10 @@ def extract_tokens(text: str) -> list:
     current_compound = ""
     for token in tokenizer.tokenize(str(text)):
         pos = token.part_of_speech.split(',')
-        # 代名詞や非自立語を弾きつつ名詞を抽出
         if pos[0] == '名詞' and pos[1] not in ['代名詞', '非自立', '数']:
             current_compound += token.surface
         else:
             if current_compound:
-                # 💡 1文字、ひらがな2文字以下、ストップワードを徹底除外
                 if len(current_compound) > 1 and current_compound not in STOP_WORDS and not re.fullmatch(r'[ぁ-ん]{1,2}', current_compound):
                     tokens.append(current_compound)
                 current_compound = ""
@@ -119,6 +116,9 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
         fyt = word_platforms[w]['YouTube']
         cross_platform_raw = (2 * min(fx, fyt)) / (fx + fyt + 1)
         
+        # 💡 新機能: プラットフォーム比率(Xの割合)を計算
+        x_ratio_raw = fx / max(1, fx + fyt)
+        
         max_conversion = 0.0
         for mw in MAGIC_WORDS:
             if G.has_edge(w, mw):
@@ -142,6 +142,7 @@ def compute_network_and_features(df_raw: pd.DataFrame, min_freq: int) -> tuple[p
             'engagement_raw': word_eng[w] / max(1, word_counts[w]),
             'bridge_raw': betweenness.get(w, 0.0),
             'cross_platform_raw': cross_platform_raw,
+            'x_ratio_raw': x_ratio_raw,  # 追加
             'sustainability_raw': sustainability_raw,
             'novelty_raw': novelty_raw,
             'conversion_raw': max_conversion,
@@ -184,6 +185,8 @@ def standardize_features(df_features: pd.DataFrame) -> pd.DataFrame:
     for col in ['cross_platform', 'sustainability', 'novelty', 'conversion']:
         df[f'{col}_z'] = df[f'{col}_raw'].fillna(0).clip(0, 1)
         
+    df['x_ratio'] = df['x_ratio_raw'] # 比率は0-1なのでそのまま渡す
+        
     return df
 
 def compute_scores(df_z: pd.DataFrame) -> pd.DataFrame:
@@ -211,12 +214,25 @@ def apply_decision_rules(df: pd.DataFrame) -> pd.DataFrame:
 
     def generate_text(row):
         kw = row['token']
+        x_ratio = row.get('x_ratio', 0.5)
+        cross = row.get('cross_platform_z', 0.0)
+
         if kw in MAGIC_WORDS: return "見送り", ""
-        if row['bridge_z'] >= 0.3: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
-        elif row['is_high_css'] and row['conversion_z'] >= 0.3: return "解説型", f"【急上昇】今さら聞けない「{kw}」とは？"
-        elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
-        elif row['is_high_css']: return "まとめ型", f"【まとめ】バズり中の「{kw}」、みんなの反応"
-        return "見送り", ""
+        
+        is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
+        is_x_heavy = x_ratio > 0.7
+        
+        # 💡 プラットフォームバイアスに応じた「投稿型」の出し分け
+        if is_cross:
+            if row['bridge_z'] >= 0.2: return "比較型", f"【徹底比較】「{kw}」と競合の違いまとめ"
+            elif row['is_high_eos']: return "先読み型", f"【次に来る】そろそろ知っておきたい「{kw}」"
+            else: return "網羅まとめ型", f"【完全網羅】話題の「{kw}」に関する全情報"
+        elif is_x_heavy:
+            if row['novelty_z'] >= 0.5: return "速報型", f"【速報】Xで話題沸騰中の「{kw}」とは？"
+            else: return "反応まとめ型", f"【Xで話題】「{kw}」に対するみんなの反応"
+        else:
+            if row['conversion_z'] >= 0.2 or row['is_high_css']: return "解説型", f"【分かりやすく解説】「{kw}」の基本と使い方"
+            else: return "検証型", f"【検証】噂の「{kw}」を実際に試してみた"
 
     df[['text_content_type', 'text_title_seed']] = df.apply(lambda r: pd.Series(generate_text(r)), axis=1)
     return df
