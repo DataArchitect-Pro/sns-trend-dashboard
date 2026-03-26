@@ -21,7 +21,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意 (省略せずに記載)
+# 2. サンプルデータの用意
 # ==========================================
 SAMPLE_CSV = """text,posted_at,platform,eng,id
 次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
@@ -247,13 +247,11 @@ if df.empty:
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
 
-# 💡 広がり(Network)は絶対条件から外し、「広がり」か「新規性(Novelty)」のどちらかがあればS昇格を許容
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_emerging = (df_display['novelty_z'] >= 0.5) 
-is_spike = df_display['duration_hours'] < 1.0  # 1時間未満の局所集中はスパイクとして弾く
+is_spike = df_display['duration_hours'] < 1.0 
 is_high_score = (df_display['score_eos'] >= 50) | (df_display['score_css'] >= 50)
 
-# 💡 Sランクの条件緩和（パターン1救済）
 s_condition = (~is_spike) & is_high_score & (has_network | is_emerging)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
@@ -265,7 +263,6 @@ if len(top3_indices) > 0: df_display.loc[top3_indices[0], 'Rank_Num'] = "①"
 if len(top3_indices) > 1: df_display.loc[top3_indices[1], 'Rank_Num'] = "②"
 if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 
-# A/Sの境界判定
 def set_priority(row):
     if row['Rank_Num'] != "": 
         return "🔥 S (最優先)"
@@ -280,7 +277,6 @@ df_display['text_content_type'] = df_display.apply(
     axis=1
 )
 
-# 💡 AとCの理由の明文化と解像度アップ
 def enrich_card_data(row):
     original_ctype = row['text_content_type']
     pri = row['priority']
@@ -289,7 +285,8 @@ def enrich_card_data(row):
     has_net = (row.get('conversion_z', 0) > 0) or (row.get('bridge_z', 0) > 0)
     
     if pri == "🔥 S (最優先)":
-        if rank == "①": reason = "圧倒的な成長率と新規性を持ち、今すぐ先回りすべき本命"
+        # 💡 過度な形容詞「圧倒的」を削除し、客観的でフラットなトーンに調整
+        if rank == "①": reason = "成長率と新規性が高く、今すぐ先回りすべき本命"
         elif rank == "②": reason = "関連テーマへの広がりが強く、独自の切り口で狙える"
         else: reason = "反応が急増しており、継続監視しつつ先読みが効く"
             
@@ -324,7 +321,6 @@ df_display = df_display.sort_values(by=['priority', 'action', 'score_eos', 'scor
 
 df_display['plot_label'] = df_display.apply(lambda r: r['Rank_Num'] if r['Rank_Num'] else "", axis=1)
 
-# 💡 スコアのフォーマット処理 (一覧表での検証用)
 for col in ['novelty_z', 'growth_z', 'sustainability_z', 'conversion_z', 'bridge_z']:
     if col in df_display.columns:
         df_display[col] = df_display[col].round(2)
@@ -422,7 +418,6 @@ st.divider()
 st.subheader("📋 行動計画・キーワード一覧")
 st.caption("S=今すぐ着手 / A=監視しつつ検討 / C=今回は見送り")
 
-# 💡 一覧表に「ブラックボックスを解明する」内部スコアを追加
 view_cols = {
     'priority': '優先度',
     'token': 'キーワード', 
@@ -437,6 +432,7 @@ view_cols = {
     'conversion_z': '広がり'
 }
 
+# 💡 常に一覧表を表示し、詳細な内部スコアを提供する
 st.dataframe(
     df_display[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
