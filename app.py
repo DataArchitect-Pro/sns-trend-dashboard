@@ -21,25 +21,26 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. サンプルデータの用意
+# 2. 混合ケース用 サンプルデータ（全パターン混在）
 # ==========================================
 SAMPLE_CSV = """text,posted_at,platform,eng,id
-次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,A01
-NanoBananaの始め方を初心者向けに解説します。,2023-10-01 10:15:00,YouTube,80,A02
-画像生成AIのNanoBanana、プロンプトのコツと始め方。,2023-10-01 10:30:00,X,60,A03
-画像生成AIのNanoBananaとは？他のAIとの違いを比較してみた。,2023-10-01 11:00:00,YouTube,120,A04
-PythonとJavaScriptの違いを徹底比較！どっちを学ぶべき？,2023-10-01 11:30:00,YouTube,300,B01
-初心者におすすめなのはPython？JavaScript？違いを解説。,2023-10-01 12:00:00,X,150,B02
-Web開発ならJavaScript、AIならPython。それぞれのメリットを比較。,2023-10-01 12:30:00,X,180,B03
-Pythonの学習ロードマップまとめ。初心者必見！,2023-10-01 13:00:00,YouTube,400,B04
-今期の覇権アニメ、神作画すぎた。みんなの反応まとめ。,2023-10-01 13:30:00,X,1500,C01
-覇権アニメ第8話の伏線考察まとめ！,2023-10-01 14:00:00,YouTube,2500,C02
-覇権アニメの最新話、海外の反応まとめ動画です。,2023-10-01 14:30:00,YouTube,3000,C03
-覇権アニメ、なぜここまで人気なのか？海外の反応と理由を解説。,2023-10-01 15:00:00,X,1200,C04
-アマギフプレゼント！フォローとRTをお願いします！,2023-10-01 15:30:00,X,0,E01
-抽選で最新ゲーム機プレゼント！RTとフォロー必須！,2023-10-01 16:00:00,X,0,E02
-今日の仕事疲れたー。早く帰宅したい。,2023-10-01 16:30:00,X,5,F01
-仕事終わらない。明日も仕事だ。,2023-10-01 17:00:00,X,2,F02
+次世代の画像生成AI、NanoBananaとは？始め方を解説。,2023-10-01 10:00:00,X,50,M01
+NanoBananaの始め方を初心者向けに解説します。,2023-10-01 12:15:00,YouTube,80,M02
+画像生成AIのNanoBanana、プロンプトのコツと始め方。,2023-10-01 14:30:00,X,60,M03
+ChatGPTのおすすめ活用法を改めて整理。,2023-10-01 09:00:00,X,2100,M04
+ChatGPTで議事録を作る方法。,2023-10-01 11:30:00,YouTube,2400,M05
+ChatGPT活用術。いまさら聞けない基本。,2023-10-01 13:00:00,X,1850,M06
+放送事故まとめ。今夜の配信で一番ざわついた場面。,2023-10-01 20:00:00,X,3000,M07
+放送事故の反応、TLが一気にこれ一色。,2023-10-01 20:10:00,X,4500,M08
+放送事故、何が起きたか簡潔にまとめる。,2023-10-01 20:20:00,X,3200,M09
+謎の個人開発ツール、誰も使ってない。,2023-10-01 10:00:00,X,1,M10
+謎の個人開発ツールをインストールした。,2023-10-01 12:00:00,X,0,M11
+謎の個人開発ツール、アンインストールした。,2023-10-01 14:00:00,X,2,M12
+普通にすごかった。,2023-10-01 09:00:00,X,8,M13
+普通の日記です。,2023-10-01 12:00:00,X,4,M14
+普通の生活が一番。,2023-10-01 15:00:00,X,5,M15
+最新スマホ欲しいな。,2023-10-01 10:00:00,X,10,M16
+最新スマホのリーク情報。,2023-10-01 11:00:00,X,20,M17
 """
 
 # ==========================================
@@ -53,11 +54,11 @@ with st.sidebar:
     st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
     
     st.download_button(
-        label="📥 サンプルCSVをダウンロード",
+        label="📥 混合ケース用CSVをダウンロード",
         data=SAMPLE_CSV,
         file_name="sample_sns_data.csv",
         mime="text/csv",
-        help="フォーマットの確認や、お試し分析にご利用ください。"
+        help="S(新語)・A(飽和/スパイク)・C(ノイズ)が全て出現するよう設計されたテストデータです"
     )
 
     st.divider()
@@ -176,7 +177,6 @@ if df.empty:
     col_err_left, col_err_right = st.columns([1, 1], gap="large")
     
     with col_err_left:
-        # 💡 主因を1本化して明示
         drop_reason = metadata.get('drop_reason', '条件未達')
         if drop_reason == "出現回数不足":
             main_cause = "出現回数不足"
@@ -195,7 +195,6 @@ if df.empty:
         
         suggested_min_freq = max(1, min_freq - 1)
         
-        # 💡 推奨アクションの優先順位を固定
         st.markdown(f"""
         <div style="margin-top: 16px; margin-bottom: 8px; font-weight: bold; color: #1976d2;">💡 推奨されるアクション</div>
         <div style="background-color: #f0f7ff; border: 2px solid #90caf9; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
@@ -227,10 +226,8 @@ if df.empty:
             <span style="color: #777; font-size: 0.85em; margin-left: 12px;">有効投稿数：<b style="color: #333;">{valid_posts}件</b></span><br><br>
             <span style="color: #555;">抽出された候補語数：</span> <b style="font-size: 1.1em;">{extracted}件</b><br>
             <span style="color: #555;">しきい値を通過した語数：</span> <b style="color: #d32f2f; font-size: 1.2em;">{passed}件</b><br><br>
-            <hr style="margin: 12px 0; border: none; border-top: 1px dashed #ccc;">
             <strong style="color: #555; font-size: 0.95em;">⚙️ 現在の設定値</strong><br>
             <span style="color: #333; font-size: 0.95em;">最低出現回数： <b style="font-size: 1.1em; color: #1976d2;">{min_freq}</b></span><br>
-            <span style="color: #666; font-size: 0.9em;">ノイズ判定語表示： <b>{'ON' if show_noise else 'OFF'}</b></span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -491,6 +488,10 @@ st.divider()
 st.subheader("📋 行動計画・キーワード一覧")
 st.caption("S=今すぐ着手 / A=監視しつつ検討 / C=今回は見送り")
 
+# 💡 優先と見送り（Cランク）のリストを分離
+df_sa = df_display[df_display['priority'].isin(['🔥 S (最優先)', '👀 A (保留)'])]
+df_c = df_display[df_display['priority'] == '➖ C (見送り)']
+
 view_cols = {
     'priority': '優先度',
     'token': 'キーワード', 
@@ -508,10 +509,23 @@ view_cols = {
     'saturated_penalty': '飽和ペナルティ' 
 }
 
+st.markdown("##### 🎯 優先対応リスト（S・Aランク）")
 st.dataframe(
-    df_display[list(view_cols.keys())].rename(columns=view_cols),
+    df_sa[list(view_cols.keys())].rename(columns=view_cols),
     use_container_width=True, hide_index=True
 )
+
+st.write("")
+st.markdown("##### 🗑️ 見送り・優先外リスト（Cランク）")
+if not df_c.empty:
+    st.dataframe(
+        df_c[list(view_cols.keys())].rename(columns=view_cols),
+        use_container_width=True, hide_index=True
+    )
+else:
+    st.info("現在、Cランク（見送り）に該当するキーワードはありません。")
+
+st.divider()
 
 # 💡 除外された単語（ブラックボックス）をUIに表示する機能
 with st.expander("🔍 抽出プロセスの詳細ログ（足切り・除外された単語）", expanded=False):
