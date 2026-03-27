@@ -23,17 +23,18 @@ def check_password():
 
     # 認証されていない場合の画面表示
     if not st.session_state["authenticated"]:
-        st.write("")
-        st.write("")
-        st.markdown("<h2 style='text-align: center; color: #333;'>🔒 購入者限定エリア</h2>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #666;'>SNS Trend Analyzer は、note記事の購入者限定で公開しています。</p>", unsafe_allow_html=True)
-        st.write("")
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center; color: #333; font-size: 2.5em;'>🔒 購入者限定エリア</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #666; font-size: 1.3em; margin-bottom: 30px;'>SNS Trend Analyzer は、note記事の購入者限定で公開しています。</p>", unsafe_allow_html=True)
         
         # 中央に寄せるためのレイアウト調整
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
+            # 💡 デフォルトのラベルではなく、大きめのHTMLテキストを配置
+            st.markdown("<div style='font-size: 1.15em; font-weight: bold; margin-bottom: 8px; color: #333;'>🔑 note記事の有料エリアにあるパスワードを入力してください</div>", unsafe_allow_html=True)
             with st.form("login_form"):
-                password = st.text_input("note記事の有料エリアにあるパスワードを入力してください", type="password")
+                # label_visibility="collapsed" でデフォルトの小さなラベルを隠す
+                password = st.text_input("パスワード", type="password", label_visibility="collapsed")
                 submit = st.form_submit_button("認証する", use_container_width=True)
 
                 if submit:
