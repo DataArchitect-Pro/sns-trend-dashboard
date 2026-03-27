@@ -23,7 +23,7 @@ def check_password():
     
     # 💡 許可された個別IDのリスト（1000人規模の場合はSecretsにリストで定義します）
     # Secretsがない場合のテスト用にいくつかIDを入れておきます
-    allowed_ids = st.secrets.get("ALLOWED_IDS", ["buyer001", "buyer002", "admin"])
+    allowed_ids = st.secrets.get("ALLOWED_IDS", ["buyer001", "buyer002"])
     
     active_sessions = get_active_sessions()
 
