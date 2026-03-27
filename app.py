@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import uuid  # 💡 セッショントークン生成用
 from logic import run_pipeline, MAGIC_WORDS
 
 # ==========================================
@@ -9,45 +10,77 @@ from logic import run_pipeline, MAGIC_WORDS
 st.set_page_config(page_title="SNS Trend Analyzer", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 1. 認証ロジック (購入者限定パスワード)
+# 1. 認証ロジック (共通パスワード + 個別ID + 同時ログイン防止)
 # ==========================================
+# 💡 アプリ全体で共有される「現在ログイン中のセッション一覧」をメモリ上に作成
+@st.cache_resource
+def get_active_sessions():
+    return {}  # { "user_id": "session_token" }
+
 def check_password():
-    # 💡 パスワードの設定
-    # Streamlit Cloudで公開する場合は、Settings > Secrets に APP_PASSWORD = "設定したいパスワード" と記述するのが最も安全です。
-    # Secretsが設定されていない場合は、第2引数の "note2026" がデフォルトパスワードとして機能します。適宜書き換えてください。
-    correct_password = st.secrets.get("APP_PASSWORD", "hF4@arBG81QlJzJjus")
+    # 💡 共通パスワード（Secretsから取得、なければデフォルト値）
+    common_password = st.secrets.get("APP_PASSWORD", "hF4@arBG81QlJzJjus")
+    
+    # 💡 許可された個別IDのリスト（1000人規模の場合はSecretsにリストで定義します）
+    # Secretsがない場合のテスト用にいくつかIDを入れておきます
+    allowed_ids = st.secrets.get("ALLOWED_IDS", ["buyer001", "buyer002", "admin"])
+    
+    active_sessions = get_active_sessions()
 
-    # セッションステートに認証フラグがない場合は初期化
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
+    # セッションステートの初期化
+    if "user_id" not in st.session_state:
+        st.session_state["user_id"] = None
+    if "session_token" not in st.session_state:
+        st.session_state["session_token"] = None
 
-    # 認証されていない場合の画面表示
-    if not st.session_state["authenticated"]:
+    current_user = st.session_state["user_id"]
+    current_token = st.session_state["session_token"]
+
+    # 💡 同時ログイン監視：自分の持つトークンが、サーバー上の最新トークンと違う場合は追い出す
+    if current_user:
+        if active_sessions.get(current_user) != current_token:
+            st.session_state["user_id"] = None
+            st.session_state["session_token"] = None
+            st.warning("⚠️ 別の端末またはブラウザでログインされたため、セキュリティ維持のため自動ログアウトしました。")
+            current_user = None
+
+    # ログインしていない場合の画面表示
+    if not current_user:
         st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown("<h1 style='text-align: center; color: #333; font-size: 2.5em;'>🔒 購入者限定エリア</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #666; font-size: 1.3em; margin-bottom: 30px;'>SNS Trend Analyzer は、note記事の購入者限定で公開しています。</p>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center; color: #333; font-size: 2.5em;'>🔒 ユーザーログイン</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #666; font-size: 1.3em; margin-bottom: 30px;'>付与された専用IDと、共通パスワードを入力してください。</p>", unsafe_allow_html=True)
         
-        # 中央に寄せるためのレイアウト調整
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            # 💡 デフォルトのラベルではなく、大きめのHTMLテキストを配置
-            st.markdown("<div style='font-size: 1.15em; font-weight: bold; margin-bottom: 8px; color: #333;'>🔑 note記事の有料エリアにあるパスワードを入力してください</div>", unsafe_allow_html=True)
             with st.form("login_form"):
-                # label_visibility="collapsed" でデフォルトの小さなラベルを隠す
-                password = st.text_input("パスワード", type="password", label_visibility="collapsed")
+                st.markdown("<div style='font-size: 1.0em; font-weight: bold; margin-bottom: 4px; color: #333;'>📝 専用ユーザーID</div>", unsafe_allow_html=True)
+                user_id = st.text_input("ID", placeholder="例：noteの注文IDなど", label_visibility="collapsed")
+                
+                st.markdown("<div style='font-size: 1.0em; font-weight: bold; margin-top: 12px; margin-bottom: 4px; color: #333;'>🔑 共通パスワード</div>", unsafe_allow_html=True)
+                password = st.text_input("パスワード", type="password", placeholder="記事内にあるパスワードを入力", label_visibility="collapsed")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
                 submit = st.form_submit_button("認証する", use_container_width=True)
 
                 if submit:
-                    if password == correct_password:
-                        st.session_state["authenticated"] = True
-                        st.rerun() # 画面をリロードしてメインアプリを表示
+                    if password != common_password:
+                        st.error("❌ パスワードが間違っています。")
+                    elif user_id not in allowed_ids:
+                        st.error("❌ 登録されていないユーザーIDです。")
                     else:
-                        st.error("❌ パスワードが間違っています。再度お試しください。")
+                        # 認証成功：新しいユニークトークンを発行
+                        new_token = str(uuid.uuid4())
+                        st.session_state["user_id"] = user_id
+                        st.session_state["session_token"] = new_token
+                        
+                        # サーバー上の共有メモリを上書き（古い端末のトークンが無効になる）
+                        active_sessions[user_id] = new_token
+                        st.rerun() # 画面をリロードしてメインアプリを表示
         
         # 認証されるまで以降のコードを一切実行しない
         st.stop()
 
-# アプリ起動時に必ずパスワードチェックを実行
+# アプリ起動時に必ずパスワードとセッションをチェック
 check_password()
 
 # ==========================================
@@ -66,30 +99,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. 混合ケース用 サンプルデータ
-# ==========================================
-SAMPLE_CSV = """text,posted_at,platform,eng,id
-次世代の画像生成AI、NanoBananaとは？始め方を解説。,2026-03-01 10:00:00,X,50,M01
-NanoBananaの始め方を初心者向けに解説します。,2026-03-01 12:15:00,YouTube,80,M02
-画像生成AIのNanoBanana、プロンプトのコツと始め方。,2026-03-01 14:30:00,X,60,M03
-ChatGPTのおすすめ活用法を改めて整理。,2026-03-01 09:00:00,X,2100,M04
-ChatGPTで議事録を作る方法。,2026-03-01 11:30:00,YouTube,2400,M05
-ChatGPT活用術。いまさら聞けない基本。,2026-03-01 13:00:00,X,1850,M06
-放送事故まとめ。今夜の配信で一番ざわついた場面。,2026-03-01 20:00:00,X,3000,M07
-放送事故の反応、TLが一気にこれ一色。,2026-03-01 20:10:00,X,4500,M08
-放送事故、何が起きたか簡潔にまとめる。,2026-03-01 20:20:00,X,3200,M09
-謎の個人開発ツール、誰も使ってない。,2026-03-01 10:00:00,X,1,M10
-謎の個人開発ツールをインストールした。,2026-03-01 12:00:00,X,0,M11
-謎の個人開発ツール、アンインストールした。,2026-03-01 14:00:00,X,2,M12
-普通にすごかった。,2026-03-01 09:00:00,X,8,M13
-普通の日記です。,2026-03-01 12:00:00,X,4,M14
-普通の生活が一番。,2026-03-01 15:00:00,X,5,M15
-最新スマホ欲しいな。,2026-03-01 10:00:00,X,10,M16
-最新スマホのリーク情報。,2026-03-01 11:00:00,X,20,M17
-"""
-
-# ==========================================
-# 4. サイドバー
+# 3. サイドバー
 # ==========================================
 with st.sidebar:
     st.header("STEP 1: データ読み込み")
@@ -97,14 +107,6 @@ with st.sidebar:
     
     uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
     st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
-    
-    st.download_button(
-        label="📥 サンプルCSVをダウンロード",
-        data=SAMPLE_CSV,
-        file_name="sample_sns_data.csv",
-        mime="text/csv",
-        help="S(新語)・A(飽和/スパイク)・C(ノイズ)が全て出現するよう設計されたテストデータです"
-    )
 
     st.divider()
 
@@ -137,8 +139,15 @@ with st.sidebar:
         help="反応数も加味して話題性を評価します。投稿本文だけで見たい場合はオフにしてください。"
     )
 
+    # ログアウトボタン（任意追加）
+    st.divider()
+    if st.button("🚪 ログアウト", use_container_width=True):
+        st.session_state["user_id"] = None
+        st.session_state["session_token"] = None
+        st.rerun()
+
 # ==========================================
-# 5. メイン画面（アップロード前）
+# 4. メイン画面（アップロード前）
 # ==========================================
 if uploaded_file is None:
     st.info("💡 **まずはCSVをアップロードして、トレンド分析を開始してください。** \n読み込み後すぐに、関連語・注目テーマ・投稿企画候補を生成します。")
@@ -193,7 +202,7 @@ if uploaded_file is None:
     st.stop()
 
 # ==========================================
-# 6. データ読み込みと実行
+# 5. データ読み込みと実行
 # ==========================================
 try:
     df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
@@ -280,7 +289,7 @@ if df.empty:
     st.stop()
 
 # ==========================================
-# 7. 結果の事後処理 (S/A/C境界の厳密化とルールベース分類)
+# 6. 結果の事後処理 (S/A/C境界の厳密化とルールベース分類)
 # ==========================================
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
@@ -435,7 +444,7 @@ for col in ['novelty_z', 'growth_z', 'sustainability_z', 'conversion_z', 'bridge
         df_display[col] = df_display[col].round(2)
 
 # ==========================================
-# 8. UI 描画 (結果画面)
+# 7. UI 描画 (結果画面)
 # ==========================================
 st.markdown("<div style='color: #aaa; font-size: 0.85em; margin-bottom: 8px;'>分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
 
