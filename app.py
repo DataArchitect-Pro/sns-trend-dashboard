@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import uuid  # 💡 セッショントークン生成用
+import uuid  
 from logic import run_pipeline, MAGIC_WORDS
 
 # ==========================================
@@ -12,22 +12,23 @@ st.set_page_config(page_title="SNS Trend Analyzer", layout="wide", initial_sideb
 # ==========================================
 # 1. 認証ロジック (共通パスワード + 個別ID + 同時ログイン防止)
 # ==========================================
-# 💡 アプリ全体で共有される「現在ログイン中のセッション一覧」をメモリ上に作成
+# 💡 共有メモリを堅牢に管理するためのクラス
+class SessionManager:
+    def __init__(self):
+        self.active_sessions = {}
+
 @st.cache_resource
-def get_active_sessions():
-    return {}  # { "user_id": "session_token" }
+def get_session_manager():
+    return SessionManager()
 
 def check_password():
-    # 💡 共通パスワード（Secretsから取得、なければデフォルト値）
-    common_password = st.secrets.get("APP_PASSWORD", "hF4@arBG81QlJzJjus")
+    # 💡 共通パスワードと許可IDリスト（運用時はStreamlit CloudのSecretsで設定）
+    common_password = st.secrets.get("APP_PASSWORD", "note2026")
+    allowed_ids = st.secrets.get("ALLOWED_IDS", ["buyer001", "buyer002", "admin"])
     
-    # 💡 許可された個別IDのリスト（1000人規模の場合はSecretsにリストで定義します）
-    # Secretsがない場合のテスト用にいくつかIDを入れておきます
-    allowed_ids = st.secrets.get("ALLOWED_IDS", ["buyer001", "buyer002"])
-    
-    active_sessions = get_active_sessions()
+    manager = get_session_manager()
 
-    # セッションステートの初期化
+    # 個人のセッション状態を初期化
     if "user_id" not in st.session_state:
         st.session_state["user_id"] = None
     if "session_token" not in st.session_state:
@@ -36,19 +37,20 @@ def check_password():
     current_user = st.session_state["user_id"]
     current_token = st.session_state["session_token"]
 
-    # 💡 同時ログイン監視：自分の持つトークンが、サーバー上の最新トークンと違う場合は追い出す
+    # 💡 同時ログイン監視：自分が持っているトークンが、サーバー上の最新トークンと違う場合は追い出す
     if current_user:
-        if active_sessions.get(current_user) != current_token:
+        if manager.active_sessions.get(current_user) != current_token:
             st.session_state["user_id"] = None
             st.session_state["session_token"] = None
-            st.warning("⚠️ 別の端末またはブラウザでログインされたため、セキュリティ維持のため自動ログアウトしました。")
             current_user = None
+            st.error("⚠️ 別の端末またはブラウザでログインされたため、自動ログアウトしました。")
 
     # ログインしていない場合の画面表示
     if not current_user:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown("<h1 style='text-align: center; color: #333; font-size: 2.5em;'>🔒 ユーザーログイン</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #666; font-size: 1.3em; margin-bottom: 30px;'>付与された専用IDと、共通パスワードを入力してください。</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #666; font-size: 1.3em; margin-bottom: 10px;'>付与された専用IDと、共通パスワードを入力してください。</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #d32f2f; font-size: 0.9em; margin-bottom: 30px;'>※同じIDで新しくログインすると、以前の端末は自動的にログアウトされます。</p>", unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -73,9 +75,9 @@ def check_password():
                         st.session_state["user_id"] = user_id
                         st.session_state["session_token"] = new_token
                         
-                        # サーバー上の共有メモリを上書き（古い端末のトークンが無効になる）
-                        active_sessions[user_id] = new_token
-                        st.rerun() # 画面をリロードしてメインアプリを表示
+                        # サーバー上の共有メモリを最新トークンで上書き（古い端末のトークンが無効になる）
+                        manager.active_sessions[user_id] = new_token
+                        st.rerun() 
         
         # 認証されるまで以降のコードを一切実行しない
         st.stop()
@@ -139,7 +141,7 @@ with st.sidebar:
         help="反応数も加味して話題性を評価します。投稿本文だけで見たい場合はオフにしてください。"
     )
 
-    # ログアウトボタン（任意追加）
+    # 🚪 ログアウトボタン
     st.divider()
     if st.button("🚪 ログアウト", use_container_width=True):
         st.session_state["user_id"] = None
@@ -444,7 +446,7 @@ for col in ['novelty_z', 'growth_z', 'sustainability_z', 'conversion_z', 'bridge
         df_display[col] = df_display[col].round(2)
 
 # ==========================================
-# 7. UI 描画 (結果画面)
+# 8. UI 描画 (結果画面)
 # ==========================================
 st.markdown("<div style='color: #aaa; font-size: 0.85em; margin-bottom: 8px;'>分析完了：注目テーマと投稿企画案を確認できます。</div>", unsafe_allow_html=True)
 
