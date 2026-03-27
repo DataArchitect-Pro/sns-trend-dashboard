@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import uuid  
+import time  # 💡 タイムアウト（寿命）の計算用に追加
 from logic import run_pipeline, MAGIC_WORDS
 
 # ==========================================
@@ -10,25 +11,28 @@ from logic import run_pipeline, MAGIC_WORDS
 st.set_page_config(page_title="SNS Trend Analyzer", layout="wide", initial_sidebar_state="expanded")
 
 # ==========================================
-# 1. 認証ロジック (共通パスワード + 個別ID + 同時ログイン防止)
+# 1. 認証ロジック (先勝ちブロック + タイムアウト機能)
 # ==========================================
-# 💡 共有メモリを堅牢に管理するためのクラス
-class SessionManager:
-    def __init__(self):
-        self.active_sessions = {}
-
+# 💡 アプリ全体で共有される「ログイン中のセッション状態」
 @st.cache_resource
-def get_session_manager():
-    return SessionManager()
+def get_active_sessions():
+    # 構造: { "user_id": {"token": "...", "last_active": 1690000000.0} }
+    return {}
 
 def check_password():
-    # 💡 共通パスワードと許可IDリスト（運用時はStreamlit CloudのSecretsで設定）
     common_password = st.secrets.get("APP_PASSWORD", "hF4@arBG81QlJzJjus")
     allowed_ids = st.secrets.get("ALLOWED_IDS", ["a380.rolls.royce@gmail.com"])
     
-    manager = get_session_manager()
+    active_sessions = get_active_sessions()
+    current_time = time.time()
+    
+    # 💡 安全装置：30分（1800秒）操作がなかったセッションは「ログアウト忘れ（ブラウザ閉じ）」とみなし、ロックを解除する
+    TIMEOUT_SECONDS = 1800 
+    for uid in list(active_sessions.keys()):
+        if current_time - active_sessions[uid]["last_active"] > TIMEOUT_SECONDS:
+            del active_sessions[uid]
 
-    # 個人のセッション状態を初期化
+    # セッションステートの初期化
     if "user_id" not in st.session_state:
         st.session_state["user_id"] = None
     if "session_token" not in st.session_state:
@@ -37,20 +41,23 @@ def check_password():
     current_user = st.session_state["user_id"]
     current_token = st.session_state["session_token"]
 
-    # 💡 同時ログイン監視：自分が持っているトークンが、サーバー上の最新トークンと違う場合は追い出す
+    # 💡 現在ログイン中のユーザーが操作した際の生存確認（タイムアウトの更新）
     if current_user:
-        if manager.active_sessions.get(current_user) != current_token:
+        if current_user in active_sessions and active_sessions[current_user]["token"] == current_token:
+            # 操作するたびに寿命をリセット（延長）する
+            active_sessions[current_user]["last_active"] = current_time
+        else:
+            # タイムアウト等でサーバーから消去された場合はログアウト状態に戻す
             st.session_state["user_id"] = None
             st.session_state["session_token"] = None
             current_user = None
-            st.error("⚠️ 別の端末またはブラウザでログインされたため、自動ログアウトしました。")
 
     # ログインしていない場合の画面表示
     if not current_user:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown("<h1 style='text-align: center; color: #333; font-size: 2.5em;'>🔒 ユーザーログイン</h1>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; color: #666; font-size: 1.3em; margin-bottom: 10px;'>付与された専用IDと、共通パスワードを入力してください。</p>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #d32f2f; font-size: 0.9em; margin-bottom: 30px;'>※同じIDで新しくログインすると、以前の端末は自動的にログアウトされます。</p>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #d32f2f; font-size: 0.9em; margin-bottom: 30px;'>※同時ログイン不可（別の人が使用中のIDではログインできません）</p>", unsafe_allow_html=True)
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -62,21 +69,22 @@ def check_password():
                 password = st.text_input("パスワード", type="password", placeholder="記事内にあるパスワードを入力", label_visibility="collapsed")
                 
                 st.markdown("<br>", unsafe_allow_html=True)
-                submit = st.form_submit_button("認証する", use_container_width=True)
+                submit = st.form_submit_button("ログイン", use_container_width=True)
 
                 if submit:
                     if password != common_password:
                         st.error("❌ パスワードが間違っています。")
                     elif user_id not in allowed_ids:
                         st.error("❌ 登録されていないユーザーIDです。")
+                    elif user_id in active_sessions:
+                        # 💡 ここで「後からのログイン」を完全にブロックする
+                        st.error("❌ このIDは現在別の端末・ブラウザで利用中です。（同時ログイン不可）\n\n※前の利用者がログアウトするか、一定時間（最大30分）経過するまでお待ちください。")
                     else:
-                        # 認証成功：新しいユニークトークンを発行
+                        # 認証成功：新しいユニークトークンを発行し、時間を記録
                         new_token = str(uuid.uuid4())
                         st.session_state["user_id"] = user_id
                         st.session_state["session_token"] = new_token
-                        
-                        # サーバー上の共有メモリを最新トークンで上書き（古い端末のトークンが無効になる）
-                        manager.active_sessions[user_id] = new_token
+                        active_sessions[user_id] = {"token": new_token, "last_active": current_time}
                         st.rerun() 
         
         # 認証されるまで以降のコードを一切実行しない
@@ -101,7 +109,30 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. サイドバー
+# 3. サンプルデータ
+# ==========================================
+SAMPLE_CSV = """text,posted_at,platform,eng,id
+次世代の画像生成AI、NanoBananaとは？始め方を解説。,2026-03-01 10:00:00,X,50,M01
+NanoBananaの始め方を初心者向けに解説します。,2026-03-01 12:15:00,YouTube,80,M02
+画像生成AIのNanoBanana、プロンプトのコツと始め方。,2026-03-01 14:30:00,X,60,M03
+ChatGPTのおすすめ活用法を改めて整理。,2026-03-01 09:00:00,X,2100,M04
+ChatGPTで議事録を作る方法。,2026-03-01 11:30:00,YouTube,2400,M05
+ChatGPT活用術。いまさら聞けない基本。,2026-03-01 13:00:00,X,1850,M06
+放送事故まとめ。今夜の配信で一番ざわついた場面。,2026-03-01 20:00:00,X,3000,M07
+放送事故の反応、TLが一気にこれ一色。,2026-03-01 20:10:00,X,4500,M08
+放送事故、何が起きたか簡潔にまとめる。,2026-03-01 20:20:00,X,3200,M09
+謎の個人開発ツール、誰も使ってない。,2026-03-01 10:00:00,X,1,M10
+謎の個人開発ツールをインストールした。,2026-03-01 12:00:00,X,0,M11
+謎の個人開発ツール、アンインストールした。,2026-03-01 14:00:00,X,2,M12
+普通にすごかった。,2026-03-01 09:00:00,X,8,M13
+普通の日記です。,2026-03-01 12:00:00,X,4,M14
+普通の生活が一番。,2026-03-01 15:00:00,X,5,M15
+最新スマホ欲しいな。,2026-03-01 10:00:00,X,10,M16
+最新スマホのリーク情報。,2026-03-01 11:00:00,X,20,M17
+"""
+
+# ==========================================
+# 4. サイドバー
 # ==========================================
 with st.sidebar:
     st.header("STEP 1: データ読み込み")
@@ -109,6 +140,14 @@ with st.sidebar:
     
     uploaded_file = st.file_uploader("CSVアップロード", type=["csv"], label_visibility="collapsed")
     st.markdown("<div style='color: #666; font-size: 0.8em; margin-top: -10px; margin-bottom: 10px;'>🔒 データはこのセッション内でのみ処理され、保存されません。</div>", unsafe_allow_html=True)
+    
+    st.download_button(
+        label="📥 サンプルCSVをダウンロード",
+        data=SAMPLE_CSV,
+        file_name="sample_sns_data.csv",
+        mime="text/csv",
+        help="S(新語)・A(飽和/スパイク)・C(ノイズ)が全て出現するよう設計されたテストデータです"
+    )
 
     st.divider()
 
@@ -141,15 +180,21 @@ with st.sidebar:
         help="反応数も加味して話題性を評価します。投稿本文だけで見たい場合はオフにしてください。"
     )
 
-    # 🚪 ログアウトボタン
+    # 🚪 ログアウトボタンの処理
     st.divider()
     if st.button("🚪 ログアウト", use_container_width=True):
+        uid = st.session_state.get("user_id")
+        active_sessions = get_active_sessions()
+        # ログアウト時に共有メモリから自分のIDを削除し、ロックを解除する
+        if uid and uid in active_sessions:
+            del active_sessions[uid]
+        
         st.session_state["user_id"] = None
         st.session_state["session_token"] = None
         st.rerun()
 
 # ==========================================
-# 4. メイン画面（アップロード前）
+# 5. メイン画面（アップロード前）
 # ==========================================
 if uploaded_file is None:
     st.info("💡 **まずはCSVをアップロードして、トレンド分析を開始してください。** \n読み込み後すぐに、関連語・注目テーマ・投稿企画候補を生成します。")
@@ -204,7 +249,7 @@ if uploaded_file is None:
     st.stop()
 
 # ==========================================
-# 5. データ読み込みと実行
+# 6. データ読み込みと実行
 # ==========================================
 try:
     df_raw = pd.read_csv(uploaded_file, encoding='utf-8')
@@ -291,7 +336,7 @@ if df.empty:
     st.stop()
 
 # ==========================================
-# 6. 結果の事後処理 (S/A/C境界の厳密化とルールベース分類)
+# 7. 結果の事後処理 (S/A/C境界の厳密化とルールベース分類)
 # ==========================================
 df_display = df if 'is_noise' not in df.columns or show_noise else df[~df['is_noise']].copy()
 df_display['duration_hours'] = df_display.get('duration_hours', 1.0)
@@ -300,19 +345,22 @@ is_low_impact = df_display['engagement_raw'] < 5.0
 has_network = (df_display['conversion_z'] > 0) | (df_display['bridge_z'] > 0)
 is_abstract = df_display['token'].isin(MAGIC_WORDS) | ((df_display['token'].str.len() <= 2) & (~has_network))
 is_weak_theme = (df_display['score_css'] < 35) & (~has_network)
+is_generic_theme = df_display['token'].str.contains('比較|まとめ|解説|おすすめ|機能|使い方|方法|UI|手法|術', regex=True) & (df_display['token'].str.len() <= 6)
+
 is_emerging = (df_display['novelty_z'] >= 0.5) 
 is_spike = df_display['duration_hours'] < 1.0 
 is_continuous = (df_display['sustainability_z'] >= 0.7) & (df_display['growth_z'] >= 0.5)
 
-is_high_score = ((df_display['score_eos'] >= 50) & (df_display['score_css'] >= 35)) | (df_display['score_css'] >= 55)
+is_high_score = ((df_display['score_eos'] >= 50) & (df_display['score_css'] >= 40)) | (df_display['score_css'] >= 60)
 is_fully_saturated = df_display['novelty_z'] <= 0.05
 is_saturated = df_display.get('is_saturated', pd.Series(False, index=df_display.index))
 
 df_display['is_low_impact'] = is_low_impact
 df_display['is_abstract'] = is_abstract
 df_display['is_weak_theme'] = is_weak_theme
+df_display['is_generic_theme'] = is_generic_theme
 
-s_condition = (~is_spike) & (~is_low_impact) & (~is_fully_saturated) & (~is_abstract) & (~is_weak_theme) & is_high_score & (has_network | is_emerging | is_continuous) & ((~is_saturated) | is_continuous)
+s_condition = (~is_spike) & (~is_low_impact) & (~is_fully_saturated) & (~is_abstract) & (~is_generic_theme) & is_high_score & (has_network | is_emerging | is_continuous) & ((~is_saturated) | is_continuous)
 
 s_candidates = df_display[s_condition].sort_values(by=['score_eos', 'score_css'], ascending=[False, False])
 top3_indices = s_candidates.head(3).index
@@ -325,13 +373,13 @@ if len(top3_indices) > 2: df_display.loc[top3_indices[2], 'Rank_Num'] = "③"
 def set_priority(row):
     if row['token'] in MAGIC_WORDS:
         return "➖ C (見送り)"
-    if row['is_low_impact'] or row.get('is_abstract', False) or row.get('is_weak_theme', False):
+    if row['is_low_impact'] or row.get('is_abstract', False):
         return "➖ C (見送り)"
         
     if row['Rank_Num'] != "": 
         return "🔥 S (最優先)"
     
-    if row['score_css'] >= 45 or row['score_eos'] >= 45 or row['engagement_z'] >= 0.7 or row['freq_z'] >= 0.7: 
+    if row['score_css'] >= 40 or row['score_eos'] >= 45 or row['engagement_z'] >= 0.7 or row['freq_z'] >= 0.7: 
         return "👀 A (保留)"
         
     return "➖ C (見送り)"
@@ -344,6 +392,7 @@ def override_ctype(r):
     if r['priority'] == "👀 A (保留)":
         if r.get('duration_hours', 1.0) < 1.0: return r['text_content_type']  
         if r.get('is_saturated', False): return r['text_content_type']        
+        if r.get('is_generic_theme', False): return r['text_content_type']
         return "保留"
     return r['text_content_type']
 
@@ -369,6 +418,7 @@ def enrich_card_data(row):
     is_low_impact_flag = row.get('is_low_impact', False)
     is_continuous_flag = row.get('sustainability_z', 0) >= 0.7 and row.get('growth_z', 0) >= 0.5
     is_abstract_flag = row.get('is_abstract', False)
+    is_generic_theme_flag = row.get('is_generic_theme', False)
     is_weak_theme_flag = row.get('is_weak_theme', False)
     
     is_cross = cross >= 0.5 or (0.3 <= x_ratio <= 0.7)
@@ -380,15 +430,15 @@ def enrich_card_data(row):
         if action == "今すぐ先読み投稿": action = "今すぐ仕込み投稿"
         if action == "今すぐ初心者向け投稿": action = "今すぐ解説投稿"
         
-        if novelty >= 0.5:
+        if css < 45:
+            reason = "話題力は発展途上だが、ポテンシャルが極めて高く今のうちに先回りすべき本命テーマ"
+        elif novelty >= 0.5:
             if is_cross:
                 reason = "新規性が高く競争が浅い。媒体横断で波及し始めており、今のうちに先回りして仕込む価値が極めて高い先読み候補"
             else:
-                reason = "新規性が高く競争が浅いため、今のうちに先回りして仕込む価値が極めて高い先読み候補"
+                reason = "新規性と成長率が高く競争が浅いため、今のうちに先回りして仕込む価値が極めて高い先読み候補"
         elif is_continuous_flag:
             reason = "数日単位で安定して伸びており、一時的なスパイクではない確実な継続上昇テーマ"
-        elif css < 40:
-            reason = "話題力は発展途上だが、ポテンシャルが極めて高く今のうちに先回りすべき本命テーマ"
         elif is_cross:
             reason = "複数媒体で注目が広がっており、今すぐ仕込む価値が高い本命テーマ"
         elif is_yt_heavy:
@@ -404,8 +454,10 @@ def enrich_card_data(row):
             return "比較・解説向き", "既に認知が広く競争が激しいため、今から仕込むには優位性が低く後追いリスクが高い"
         elif is_spike_flag:
             return "様子見", "一時的急騰による局地的反応のため、継続性不透明であり一旦様子見"
+        elif is_generic_theme_flag:
+            return "派生テーマ", "検索や比較需要はあるが、単独のメインテーマとして最優先で仕込むには抽象度が高いため保留"
         elif eos >= 55 and has_net:
-            return "準本命候補", "注目候補でありポテンシャルは高いが、最優先で着手するには話題力や継続性があと一歩不足"
+            return "準本命候補", "ポテンシャルは高く注目候補だが、最優先で着手するには話題力や独自性があと一歩不足"
         elif is_yt_heavy:
             return "検索需要待ち", "YouTubeでの検索・継続視聴は見込めるが、全体の話題力・波及があと一歩不足"
         elif is_x_heavy:
@@ -419,19 +471,19 @@ def enrich_card_data(row):
             
     else: 
         if row['token'] in MAGIC_WORDS or (is_abstract_flag):
-            return "今回は見送り", "一般性・抽象度が高く、特定の投稿テーマとして成立しづらいため見送り"
+            return "今回は見送り", "一般語に近いため、特定の投稿テーマとして成立しづらい（ノイズ除外）"
         elif is_weak_theme_flag:
             return "今回は見送り", "単発の反応に留まっており、関連テーマとしての広がり・独立性が弱いため見送り"
         elif is_low_impact_flag:
             return "今回は見送り", "平均的な反応が著しく低く、トレンドとしての影響力が不足しているため見送り"
         elif is_spike_flag:
             return "今回は見送り", "反応が弱く、継続性もない単発の投稿のため今回は見送り"
-        elif css >= 30:
-            return "今回は見送り", "話題力はあるが、ポテンシャル（成長・新規性）の伸びが止まっている"
-        elif eos >= 30:
-            return "今回は見送り", "局地的な動きはあるが、全体としての話題力・広がりが弱い"
+        elif css >= 30 and eos < 30:
+            return "今回は見送り", "話題力は一部あるが、ポテンシャル（成長・新規性）が低く今後の広がりが期待できないため見送り"
+        elif eos >= 30 and css < 30:
+            return "今回は見送り", "局地的な動きはあるが、全体としての話題力が弱く単独テーマとして成立しないため見送り"
         else:
-            return "今回は見送り", "話題力・ポテンシャル共に低迷しており、今回は追う理由が薄い"
+            return "今回は見送り", "話題力・ポテンシャル共に低迷しており、投稿テーマとしての基準に達していないため今回は見送り"
 
 df_display[['action', 'reason']] = df_display.apply(lambda r: pd.Series(enrich_card_data(r)), axis=1)
 
