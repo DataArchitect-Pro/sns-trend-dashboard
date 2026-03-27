@@ -23,8 +23,8 @@ def get_session_manager():
 
 def check_password():
     # 💡 共通パスワードと許可IDリスト（運用時はStreamlit CloudのSecretsで設定）
-    common_password = st.secrets.get("APP_PASSWORD", "note2026")
-    allowed_ids = st.secrets.get("ALLOWED_IDS", ["buyer001", "buyer002", "admin"])
+    common_password = st.secrets.get("APP_PASSWORD", "hF4@arBG81QlJzJjus")
+    allowed_ids = st.secrets.get("ALLOWED_IDS", ["a380.rolls.royce@gmail.com"])
     
     manager = get_session_manager()
 
